@@ -3,6 +3,7 @@ package game
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
+import "core:math/rand"
 import ecs "flecs"
 import "sim"
 import rl "vendor:raylib"
@@ -18,13 +19,14 @@ Game_Memory :: struct {
 	time_accumulator: f32,
 	sim_state:        sim.State,
 	camera_pos:       [3]f32,
+	camera_orbit:     [3]f32, // pitch, yaw, roll
 	camera_zoom:      f32,
 	world_camera:     rl.Camera3D,
 	world_ui_camera:  rl.Camera2D,
 	ui_camera:        rl.Camera2D,
 	textures:         [dynamic]rl.Texture,
 	// queries for access to sim data
-	pos_q:            ^ecs.Query,
+	plane_q:          ^ecs.Query,
 }
 
 g: ^Game_Memory
@@ -32,25 +34,25 @@ g: ^Game_Memory
 init :: proc() {
 	g = new(Game_Memory)
 	g^ = Game_Memory {
-		run          = true,
-		textures     = make([dynamic]rl.Texture, 0),
+		run = true,
+		textures = make([dynamic]rl.Texture, 0),
+		camera_zoom = 10,
 		tick_to_real = 1.0 / 60,
-		sim_run      = true,
-		sim_state    = sim.make(),
+		sim_run = true,
+		sim_state = {seed = 6174},
 	}
-
-	sim.init(&g.sim_state)
 	append(&g.textures, rl.LoadTexture("assets/round_cat.png"))
 
-	g.pos_q = ecs.query_init(
+	sim.init(&g.sim_state)
+	g.plane_q = ecs.query_init(
 		g.sim_state.world,
-		&{terms = {0 = {id = ecs.id(g.sim_state.world, sim.Position)}}},
+		&{terms = {0 = {id = ecs.id(g.sim_state.world, sim.Plane)}}},
 	)
 }
 
 fini :: proc() {
 	delete(g.textures)
-	sim.delete(&g.sim_state)
+	sim.fini(&g.sim_state)
 	free(g)
 }
 
@@ -83,12 +85,13 @@ input :: proc() {
 	}
 
 	move: rl.Vector2
+	rotate: rl.Vector2
 
 	if rl.IsKeyDown(.UP) || rl.IsKeyDown(.W) {
-		move.y -= 1
+		move.y += 1
 	}
 	if rl.IsKeyDown(.DOWN) || rl.IsKeyDown(.S) {
-		move.y += 1
+		move.y -= 1
 	}
 	if rl.IsKeyDown(.LEFT) || rl.IsKeyDown(.A) {
 		move.x -= 1
@@ -97,8 +100,25 @@ input :: proc() {
 		move.x += 1
 	}
 
+	if rl.IsKeyDown(.Q) {
+		rotate.y -= 1
+	}
+	if rl.IsKeyDown(.E) {
+		rotate.y += 1
+	}
+
 	if rl.IsKeyPressed(.SPACE) {
 		g.sim_run = !g.sim_run
+	}
+
+	if rl.IsKeyPressed(.R) {
+		sim.fini(&g.sim_state)
+		g.sim_state.seed = rand.uint32()
+		sim.init(&g.sim_state)
+		g.plane_q = ecs.query_init(
+			g.sim_state.world,
+			&{terms = {0 = {id = ecs.id(g.sim_state.world, sim.Plane)}}},
+		)
 	}
 
 	wheel := rl.GetMouseWheelMove()
@@ -107,8 +127,9 @@ input :: proc() {
 	}
 
 	move = linalg.normalize0(move)
-	g.camera_pos.xy += move * dt * 100 * math.exp(-g.camera_zoom)
-	g.camera_pos.z = -100
+	g.camera_pos.xy += move * dt * 5 * g.camera_zoom
+	g.camera_pos.z = 0
+	g.camera_orbit.xy += rotate * math.PI * dt
 }
 
 draw :: proc(sim_state_interp: f32) {
@@ -123,24 +144,25 @@ draw :: proc(sim_state_interp: f32) {
 		rl.BeginMode3D(g.world_camera)
 		defer rl.EndMode3D()
 
-		// Draw entities as 3D billboards
-		it := ecs.query_iter(s.world, g.pos_q)
-		tex := g.textures[0]
+		// draw axis lines for
+		rl.DrawGrid(10, 1)
+
+		// Draw map with prims
+		it := ecs.query_iter(s.world, g.plane_q)
 		for ecs.query_next(&it) {
-			pos_p := ecs.field(&it, sim.Position, 0)
+			planes := ecs.field(&it, sim.Plane, 0)
 			for i in 0 ..< it.count {
-				pos := pos_p[i]
-				rl.DrawBillboardPro(
-					g.world_camera,
-					tex,
-					{0, 0, f32(tex.width), f32(tex.height)},
-					{pos.x, pos.y, 0},
-					{0, -1, 0},
-					{10, 10},
-					{5, 5},
-					0,
-					rl.WHITE,
-				)
+				plane := planes[i]
+				for chunk in plane.chunks {
+					for cell, c in chunk.data {
+						pos := sim.grid_to_vec(sim.chunk_cell_to_grid(chunk.origin, c))
+						rl.DrawCubeV(
+							{pos.x, pos.y, f32(cell.height) / 10},
+							{1, 1, 1},
+							rl.ColorLerp(rl.BLUE, rl.RED, f32(cell.height) / 128),
+						)
+					}
+				}
 			}
 		}
 	}
@@ -151,22 +173,6 @@ draw :: proc(sim_state_interp: f32) {
 		defer rl.EndMode2D()
 
 		mouse_world_pos := rl.GetScreenToWorld2D(rl.GetMousePosition(), g.world_ui_camera)
-
-		//
-		rl.DrawTextureV(g.textures[0], mouse_world_pos, rl.WHITE)
-
-		// Draw name labels on entities
-		it := ecs.query_iter(s.world, g.pos_q)
-		for ecs.query_next(&it) {
-			pos_p := ecs.field(&it, sim.Position, 0)
-			for i in 0 ..< it.count {
-				pos := pos_p[i]
-				id := ([^]ecs.Entity)(it.entities)[i]
-				name := ecs.get_name(s.world, id)
-				if name == nil do name = fmt.ctprint(id)
-				rl.DrawTextEx(rl.GetFontDefault(), name, {pos.x, pos.y}, 10, 1, rl.WHITE)
-			}
-		}
 	}
 
 	screen_ui: {
@@ -183,11 +189,15 @@ world_camera :: proc() -> rl.Camera3D {
 	h := f32(rl.GetScreenHeight())
 
 	return {
-		position = g.camera_pos,
-		target = {g.camera_pos.x, g.camera_pos.y, g.camera_pos.z + 100},
-		up = {0, -1, 0},
-		fovy = math.exp(-g.camera_zoom) * h / (h / PIXEL_WINDOW_HEIGHT),
-		projection = .ORTHOGRAPHIC,
+		position   = {
+			g.camera_pos.x + math.sin(g.camera_orbit.y) * g.camera_zoom,
+			g.camera_pos.y - math.cos(g.camera_orbit.y) * g.camera_zoom,
+			g.camera_pos.z + g.camera_zoom,
+		},
+		target     = g.camera_pos,
+		up         = {0, 0, 1},
+		fovy       = 90, //math.exp(-g.camera_zoom) * h / (h / PIXEL_WINDOW_HEIGHT),
+		projection = .PERSPECTIVE,
 	}
 }
 
