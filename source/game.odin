@@ -6,6 +6,7 @@ import "core:math/linalg"
 import "core:math/rand"
 import "core:time"
 import ecs "flecs"
+import "shader"
 import "sim"
 import sapp "sokol/app"
 import sg "sokol/gfx"
@@ -25,12 +26,11 @@ Game_Memory :: struct {
 	sim_state:        sim.State,
 	// input
 	mouse:            Mouse,
-	camera_pos:       [3]f32,
-	camera_orbit:     [3]f32, // pitch, yaw, roll
-	camera_zoom:      f32,
-	// world_camera:     rl.Camera3D,
+	world_camera:     Camera,
 	// world_ui_camera:  rl.Camera2D,
 	// ui_camera:        rl.Camera2D,
+	terrain_pipeline: sg.Pipeline,
+	terrain_bindings: sg.Bindings,
 	textures:         [dynamic]sg.Image,
 	// queries for access to sim data
 	plane_q:          ^ecs.Query,
@@ -38,8 +38,16 @@ Game_Memory :: struct {
 
 g: ^Game_Memory
 
+Camera :: struct {
+	position: [3]f32, // target point
+	orbit:    [3]f32, // pitch, yaw, roll
+	distance: f32, // from target
+	fovy:     f32,
+	_vp:      matrix[4, 4]f32,
+}
+
 Key :: struct {
-	pressed, up, down: bool,
+	down, pressed, released: bool,
 }
 
 Mouse :: struct {
@@ -54,13 +62,82 @@ init :: proc() {
 	g^ = Game_Memory {
 		run = true,
 		textures = make([dynamic]sg.Image, 0),
-		camera_zoom = 10,
+		world_camera = {orbit = {math.PI / 8, math.PI / 8, 0}, distance = 10, fovy = 60},
 		tick_to_real = time.Second / 60,
 		time_last_frame = time.now(),
 		sim_run = true,
 		sim_state = {seed = 6174},
 	}
 	//append(&g.textures, rl.LoadTexture("assets/round_cat.png")) TODO different image loader
+
+	// TEST: cube
+
+
+	
+
+	//odinfmt: disable
+	vertices := [?]f32 {
+        -1.0, -1.0, -1.0,   1.0, 0.0, 0.0, 1.0,
+         1.0, -1.0, -1.0,   1.0, 0.0, 0.0, 1.0,
+         1.0,  1.0, -1.0,   1.0, 0.0, 0.0, 1.0,
+        -1.0,  1.0, -1.0,   1.0, 0.0, 0.0, 1.0,
+
+        -1.0, -1.0,  1.0,   0.0, 1.0, 0.0, 1.0,
+         1.0, -1.0,  1.0,   0.0, 1.0, 0.0, 1.0,
+         1.0,  1.0,  1.0,   0.0, 1.0, 0.0, 1.0,
+        -1.0,  1.0,  1.0,   0.0, 1.0, 0.0, 1.0,
+
+        -1.0, -1.0, -1.0,   0.0, 0.0, 1.0, 1.0,
+        -1.0,  1.0, -1.0,   0.0, 0.0, 1.0, 1.0,
+        -1.0,  1.0,  1.0,   0.0, 0.0, 1.0, 1.0,
+        -1.0, -1.0,  1.0,   0.0, 0.0, 1.0, 1.0,
+
+        1.0, -1.0, -1.0,    1.0, 0.5, 0.0, 1.0,
+        1.0,  1.0, -1.0,    1.0, 0.5, 0.0, 1.0,
+        1.0,  1.0,  1.0,    1.0, 0.5, 0.0, 1.0,
+        1.0, -1.0,  1.0,    1.0, 0.5, 0.0, 1.0,
+
+        -1.0, -1.0, -1.0,   0.0, 0.5, 1.0, 1.0,
+        -1.0, -1.0,  1.0,   0.0, 0.5, 1.0, 1.0,
+         1.0, -1.0,  1.0,   0.0, 0.5, 1.0, 1.0,
+         1.0, -1.0, -1.0,   0.0, 0.5, 1.0, 1.0,
+
+        -1.0,  1.0, -1.0,   1.0, 0.0, 0.5, 1.0,
+        -1.0,  1.0,  1.0,   1.0, 0.0, 0.5, 1.0,
+         1.0,  1.0,  1.0,   1.0, 0.0, 0.5, 1.0,
+         1.0,  1.0, -1.0,   1.0, 0.0, 0.5, 1.0,
+  }
+  indices := [?]u16 {
+        0, 1, 2,  0, 2, 3,
+        6, 5, 4,  7, 6, 4,
+        8, 9, 10,  8, 10, 11,
+        14, 13, 12,  15, 14, 12,
+        16, 17, 18,  16, 18, 19,
+        22, 21, 20,  23, 22, 20,
+  }
+  //odinfmt: enable
+	g.terrain_bindings.vertex_buffers[0] = sg.make_buffer(
+		{data = {ptr = &vertices, size = size_of(vertices)}},
+	)
+	g.terrain_bindings.index_buffer = sg.make_buffer(
+		{usage = {index_buffer = true}, data = {ptr = &indices, size = size_of(indices)}},
+	)
+
+	g.terrain_pipeline = sg.make_pipeline(
+		{
+			shader = sg.make_shader(shader.cube_shader_desc(sg.query_backend())),
+			layout = {
+				buffers = {0 = {stride = 28}},
+				attrs = {
+					shader.ATTR_cube_position = {format = .FLOAT3},
+					shader.ATTR_cube_color0 = {format = .FLOAT4},
+				},
+			},
+			index_type = .UINT16,
+			cull_mode = .BACK,
+			depth = {write_enabled = true, compare = .LESS_EQUAL},
+		},
+	)
 
 	sim.init(&g.sim_state)
 	g.plane_q = ecs.query_init(
@@ -81,6 +158,7 @@ update :: proc() {
 	now := time.now()
 	dT := time.diff(g.time_last_frame, now)
 	defer g.time_last_frame = now
+	// TODO: compare with smoothed value sapp.frame_duration() for rendering purposes
 	g.dt_real_seconds = f32(time.duration_seconds(dT))
 	if g.sim_run {
 		g.time_accumulator += dT
@@ -103,19 +181,22 @@ update :: proc() {
 	// reset key events
 	// TODO: should make sure the window losing or regaining focus also resets these
 	for &k in keys {
-		k.down = false
-		k.up = false
+		k.pressed = false
+		k.released = false
 	}
+	g.mouse.wheel = 0
 }
 
 event :: proc(e: ^sapp.Event) {
 	#partial switch e.type {
 	case .KEY_DOWN:
-		keys[e.key_code].down = true
 		keys[e.key_code].pressed = true
+		keys[e.key_code].down = true
 	case .KEY_UP:
-		keys[e.key_code].up = true
-		keys[e.key_code].pressed = false
+		keys[e.key_code].released = true
+		keys[e.key_code].down = false
+	case .MOUSE_SCROLL:
+		g.mouse.wheel = e.scroll_y
 	}
 }
 
@@ -123,7 +204,7 @@ input :: proc() {
 	dT := time.duration_seconds(time.diff(g.time_last_frame, time.now()))
 	dt := min(f32(dT), 1. / TARGET_FPS)
 
-	if keys[.ESCAPE].down {
+	if keys[.ESCAPE].pressed {
 		// TODO: could make this call sapp.request_quit() instead, add procs to handle prompt and deny
 		g.run = false
 	}
@@ -150,12 +231,18 @@ input :: proc() {
 	if keys[.E].down {
 		rotate.y += 1
 	}
+	if keys[.R].down {
+		rotate.x += 1
+	}
+	if keys[.F].down {
+		rotate.x -= 1
+	}
 
-	if keys[.SPACE].down {
+	if keys[.SPACE].pressed {
 		g.sim_run = !g.sim_run
 	}
 
-	if keys[.R].down {
+	if keys[.R].pressed {
 		sim.fini(&g.sim_state)
 		g.sim_state.seed = rand.uint32()
 		sim.init(&g.sim_state)
@@ -166,30 +253,38 @@ input :: proc() {
 	}
 
 	if g.mouse.wheel != 0 {
-		g.camera_zoom += g.mouse.wheel * 0.5
+		g.world_camera.distance += g.mouse.wheel * 0.5
 	}
 
 	move = linalg.normalize0(move)
-	g.camera_pos.xy += move * dt * 5 * g.camera_zoom
-	g.camera_pos.z = 0
-	g.camera_orbit.xy += rotate * math.PI * dt
+	g.world_camera.position.xy += move * dt * 5 * g.world_camera.distance
+	g.world_camera.position.z = 0
+	g.world_camera.orbit.xy += rotate * math.PI * dt
+	camera_update(&g.world_camera)
 }
 
 draw :: proc(sim_state_interp: f32) {
 	s := g.sim_state
-
-	sg.begin_pass(
-		{
-			action = {colors = {0 = {load_action = .CLEAR, clear_value = {0.5, 0.5, 0.5, 1}}}},
-			swapchain = sglue.swapchain(),
-		},
-	)
-	defer sg.end_pass()
+	defer sg.commit()
 
 	world: {
-		// g.world_camera = world_camera()
-		// sg.begin_pass()
-		// defer sg.end_pass()
+
+
+		sg.begin_pass(
+			{
+				action = {colors = {0 = {load_action = .CLEAR, clear_value = {0.5, 0.5, 0.5, 1}}}},
+				swapchain = sglue.swapchain(),
+			},
+		)
+		defer sg.end_pass()
+
+		sg.apply_pipeline(g.terrain_pipeline)
+		sg.apply_bindings(g.terrain_bindings)
+		vs_params := shader.Vs_Params {
+			mvp = cam_mvp(g.world_camera),
+		}
+		sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
+		sg.draw(0, 36, 1)
 
 		// Draw map with prims
 		it := ecs.query_iter(s.world, g.plane_q)
@@ -227,6 +322,25 @@ draw :: proc(sim_state_interp: f32) {
 
 		//rl.DrawFPS(5, 5)
 	}
+}
+
+cam_mvp :: proc(cam: Camera) -> matrix[4, 4]f32 {
+	model := linalg.MATRIX4F32_IDENTITY
+
+	return cam._vp * model
+}
+
+camera_update :: proc(cam: ^Camera) {
+	aspect := sapp.widthf() / sapp.heightf()
+	projection := linalg.matrix4_perspective(math.to_radians(cam.fovy), aspect, 0.01, 100)
+	view := linalg.matrix4_look_at(
+		cam.position +
+		([3]f32{math.sin(cam.orbit.y), -math.cos(cam.orbit.y), math.sin(cam.orbit.x)} *
+				cam.distance),
+		cam.position,
+		[3]f32{0, 0, 1},
+	)
+	cam._vp = projection * view
 }
 
 // world_camera :: proc() -> rl.Camera3D {

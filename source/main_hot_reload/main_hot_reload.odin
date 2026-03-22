@@ -152,7 +152,10 @@ init :: proc "c" () {
 frame :: proc "c" () {
 	context = tracking_context
 	game_api.update()
+	// NOTE: don't try to make these into calls from the event callback, need to re-init immediately and sokol_gfx calls from within the sapp event callback aren't supported
 	reload := force_reload || force_restart
+	defer force_reload = false
+	defer force_restart = false
 	game_dll_mod, game_dll_mod_err := os.last_write_time_by_name(GAME_DLL_PATH)
 
 	if game_dll_mod_err == os.ERROR_NONE && game_api.modification_time != game_dll_mod {
