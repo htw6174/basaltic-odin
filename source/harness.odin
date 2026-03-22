@@ -27,7 +27,7 @@ created.
 
 package game
 
-import rl "vendor:raylib"
+import sapp "sokol/app"
 
 @(export)
 game_update :: proc() {
@@ -38,15 +38,6 @@ game_update :: proc() {
 }
 
 @(export)
-game_init_window :: proc() {
-	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
-	rl.InitWindow(1280, 720, "Odin + Raylib + Flecs + Hot Reload template!")
-	rl.SetWindowPosition(200, 200)
-	rl.SetTargetFPS(500)
-	rl.SetExitKey(nil)
-}
-
-@(export)
 game_init :: proc() {
 	init()
 
@@ -54,25 +45,18 @@ game_init :: proc() {
 }
 
 @(export)
-game_should_run :: proc() -> bool {
-	when ODIN_OS != .JS {
-		// Never run this proc in browser. It contains a 16 ms sleep on web!
-		if rl.WindowShouldClose() {
-			return false
-		}
-	}
+game_event :: proc(e: ^sapp.Event) {
+	event(e)
+}
 
+@(export)
+game_should_run :: proc() -> bool {
 	return g.run
 }
 
 @(export)
 game_shutdown :: proc() {
 	fini()
-}
-
-@(export)
-game_shutdown_window :: proc() {
-	rl.CloseWindow()
 }
 
 @(export)
@@ -93,18 +77,8 @@ game_hot_reloaded :: proc(mem: rawptr) {
 	// your global variables into pointers that point to something inside `g`.
 }
 
-@(export)
-game_force_reload :: proc() -> bool {
-	return rl.IsKeyPressed(.F5)
-}
-
-@(export)
-game_force_restart :: proc() -> bool {
-	return rl.IsKeyPressed(.F6)
-}
-
 // In a web build, this is called when browser changes size. Remove the
 // `rl.SetWindowSize` call if you don't want a resizable game.
 game_parent_window_size_changed :: proc(w, h: int) {
-	rl.SetWindowSize(i32(w), i32(h))
+	//sapp.(i32(w), i32(h)) TODO how to change window size from within program with sapp?
 }

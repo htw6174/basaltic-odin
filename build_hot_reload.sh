@@ -26,7 +26,8 @@ case $(uname) in
     # Copy the linux libraries into the project automatically.
     if [ ! -d "$OUT_DIR/linux" ]; then
         mkdir -p $OUT_DIR/linux
-        cp -r $ROOT/vendor/raylib/linux/libraylib*.so* $OUT_DIR/linux
+        #cp -r $ROOT/vendor/raylib/linux/libraylib*.so* $OUT_DIR/linux
+        #cp -r source/sokol/**/*debug.so $OUT_DIR/linux
         cp -r source/flecs/lib/libflecs*.so $OUT_DIR/linux
     fi
     ;;
@@ -35,7 +36,7 @@ esac
 # Build the game. Note that the game goes into $OUT_DIR while the exe stays in
 # the root folder.
 echo "Building game$DLL_EXT"
-odin build source -extra-linker-flags:"$EXTRA_LINKER_FLAGS" -define:RAYLIB_SHARED=true -build-mode:dll -out:$OUT_DIR/game_tmp$DLL_EXT -debug
+odin build source -extra-linker-flags:"$EXTRA_LINKER_FLAGS" -define:SOKOL_DLL=true -build-mode:dll -out:$OUT_DIR/game_tmp$DLL_EXT -debug
 # disabled for convenience: -strict-style -vet
 
 # Need to use a temp file on Linux because it first writes an empty `game.so`,
@@ -50,7 +51,7 @@ if pgrep -f $EXE > /dev/null; then
 fi
 
 echo "Building $EXE"
-odin build source/main_hot_reload -out:$EXE -strict-style -vet -debug
+odin build source/main_hot_reload -out:$EXE -define:SOKOL_DLL=true -strict-style -vet -debug
 
 if [ $# -ge 1 ] && [ $1 == "run" ]; then
     echo "Running $EXE"
