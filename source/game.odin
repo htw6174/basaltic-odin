@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "core:math/rand"
+import "core:slice"
 import "core:time"
 import ecs "flecs"
 import "shader"
@@ -31,6 +32,7 @@ Game_Memory :: struct {
 	// ui_camera:        rl.Camera2D,
 	terrain_pipeline: sg.Pipeline,
 	terrain_bindings: sg.Bindings,
+	cube_bindings:    sg.Bindings,
 	textures:         [dynamic]sg.Image,
 	// queries for access to sim data
 	plane_q:          ^ecs.Query,
@@ -71,9 +73,6 @@ init :: proc() {
 	//append(&g.textures, rl.LoadTexture("assets/round_cat.png")) TODO different image loader
 
 	// TEST: cube
-
-
-	
 
 	//odinfmt: disable
 	vertices := [?]f32 {
@@ -116,12 +115,14 @@ init :: proc() {
         22, 21, 20,  23, 22, 20,
   }
   //odinfmt: enable
-	g.terrain_bindings.vertex_buffers[0] = sg.make_buffer(
+	g.cube_bindings.vertex_buffers[0] = sg.make_buffer(
 		{data = {ptr = &vertices, size = size_of(vertices)}},
 	)
-	g.terrain_bindings.index_buffer = sg.make_buffer(
+	g.cube_bindings.index_buffer = sg.make_buffer(
 		{usage = {index_buffer = true}, data = {ptr = &indices, size = size_of(indices)}},
 	)
+
+	g.terrain_bindings = make_terrain_mesh(sim.CHUNK_SIZE)
 
 	g.terrain_pipeline = sg.make_pipeline(
 		{
@@ -158,7 +159,8 @@ update :: proc() {
 	now := time.now()
 	dT := time.diff(g.time_last_frame, now)
 	defer g.time_last_frame = now
-	// TODO: compare with smoothed value sapp.frame_duration() for rendering purposes
+	// TODO: consider using smoothed value sapp.frame_duration(). Can't feel an immediate different. Maybe useful for printing framerates?
+	//g.dt_real_seconds = f32(sapp.frame_duration())
 	g.dt_real_seconds = f32(time.duration_seconds(dT))
 	if g.sim_run {
 		g.time_accumulator += dT
@@ -279,12 +281,18 @@ draw :: proc(sim_state_interp: f32) {
 		defer sg.end_pass()
 
 		sg.apply_pipeline(g.terrain_pipeline)
-		sg.apply_bindings(g.terrain_bindings)
+		// test cube
+		sg.apply_bindings(g.cube_bindings)
 		vs_params := shader.Vs_Params {
 			mvp = cam_mvp(g.world_camera),
 		}
 		sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
-		sg.draw(0, 36, 1)
+		//sg.draw(0, 36, 1)
+
+		// test generated terrain
+		sg.apply_bindings(g.terrain_bindings)
+		sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
+		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 1)
 
 		// Draw map with prims
 		it := ecs.query_iter(s.world, g.plane_q)
@@ -343,22 +351,118 @@ camera_update :: proc(cam: ^Camera) {
 	cam._vp = projection * view
 }
 
-// world_camera :: proc() -> rl.Camera3D {
-// 	//w := f32(rl.GetScreenWidth())
-// 	h := f32(rl.GetScreenHeight())
+make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
+	// TODO: remove vertex color when proper shader is implemented
+	hex_count := width * width
+	mesh_width := width + 2
+	mesh_height := width + 1
+	mesh_hex_count := mesh_width * mesh_height
+	verts_per_hex := 3 * 4
+	vertex_count := mesh_hex_count * verts_per_hex
+	tris_per_hex := 6 * 4
+	triangle_count := tris_per_hex * hex_count
+	elements_per_hex := tris_per_hex * 3
+	element_count := elements_per_hex * hex_count
+	outer_radius: f32 = 0.57735026919 // = sqrt(0.75) * (2.0 / 3.0)
+	inner_radius: f32 = 0.5
+	half_edge := outer_radius / 2
+	vert_positions := [7][2]f32 {
+		{0, 0},
+		// from top middle proceed clockwise
+		{0, outer_radius},
+		{inner_radius, half_edge},
+		{inner_radius, -half_edge},
+		{0, -outer_radius},
+		{-inner_radius, -half_edge},
+		{-inner_radius, half_edge},
+	}
 
-// 	return {
-// 		position   = {
-// 			g.camera_pos.x + math.sin(g.camera_orbit.y) * g.camera_zoom,
-// 			g.camera_pos.y - math.cos(g.camera_orbit.y) * g.camera_zoom,
-// 			g.camera_pos.z + g.camera_zoom,
-// 		},
-// 		target     = g.camera_pos,
-// 		up         = {0, 0, 1},
-// 		fovy       = 90, //math.exp(-g.camera_zoom) * h / (h / PIXEL_WINDOW_HEIGHT),
-// 		projection = .PERSPECTIVE,
-// 	}
-// }
+	vertex_floats := 7 // 4 for color for default shader
+	verts := make([]f32, vertex_count * vertex_floats, context.temp_allocator)
+	elements := make([]u16, element_count, context.temp_allocator)
+
+	v_index := 0
+	add_vert :: #force_inline proc(position: [2]f32, verts: []f32, index: ^int) {
+		vd := verts[(index^ * 7):(index^ * 7) + 7]
+		vd[0] = position.x
+		vd[1] = position.y
+		vd[3] = rand.float32()
+		vd[4] = rand.float32()
+		vd[5] = rand.float32()
+		vd[6] = 1.0
+		index^ += 1
+	}
+
+	// verticies
+	for y in -1 ..< mesh_height - 1 {
+		for x in -1 ..< mesh_width - 1 {
+			hex_position := sim.grid_to_vec({i32(x), i32(y)})
+			// first tri in hex
+			for v in 0 ..< 3 {
+				add_vert(hex_position + vert_positions[v], verts, &v_index)
+			}
+			// vert in center of each hex spoke
+			for v in 0 ..< 6 {
+				p1 := vert_positions[0]
+				p2 := vert_positions[v + 1]
+				pos := (p1 + p2) / 2
+				add_vert(hex_position + pos, verts, &v_index)
+			}
+			// outside corner verts owned by this cell
+			edge_indicies := [4]u16{6, 1, 2, 3}
+			for v in 0 ..< 3 {
+				p1 := vert_positions[edge_indicies[v]]
+				p2 := vert_positions[edge_indicies[v + 1]]
+				pos := (p1 + p2) / 2
+				add_vert(hex_position + pos, verts, &v_index)
+			}
+		}
+	}
+
+	// indicies
+	e_index := 0
+	for y in 0 ..< width {
+		for x in 0 ..< width {
+			// compensate for expanded dimensions of vertex grid
+			vc := (x + 1) + ((y + 1) * mesh_width)
+			cell_base_element_index := vc * verts_per_hex
+			// relative vertex indicies (cell base in compass direction)
+			cbW := -verts_per_hex
+			cbSE := -(verts_per_hex * mesh_width)
+			cbSW := cbSE - verts_per_hex
+			basis_indicies := [?]int{
+          0, 1, 2, 3, 10, 4,
+          0, 2, cbSE + 1, 4, 11, 5,
+          0, cbSE + 1, cbSW + 2, 5, cbSE + 9, 6,
+          0, cbSW + 2, cbSW + 1, 6, cbSW + 10, 7,
+          0, cbSW + 1, cbW + 2, 7, cbW + 11, 8,
+          0, cbW + 2, 1, 8, 9, 3
+      }
+			// hextant : quadrant, but 6 of them (slice is overloaded term)
+			hextant_relative_indicies := [?]int{0, 3, 5, 1, 4, 3, 4, 2, 5, 3, 4, 5}
+			for h in 0 ..< 6 {
+				for e in 0 ..< 12 {
+					ele :=
+						cell_base_element_index +
+						basis_indicies[hextant_relative_indicies[e] + (6 * h)]
+					elements[e_index] = u16(ele)
+					e_index += 1
+				}
+			}
+		}
+	}
+
+	v_size := slice.size(verts)
+	e_size := slice.size(elements)
+
+	bindings.vertex_buffers[0] = sg.make_buffer(
+		{data = {ptr = raw_data(verts), size = uint(v_size)}},
+	)
+	bindings.index_buffer = sg.make_buffer(
+		{usage = {index_buffer = true}, data = {ptr = raw_data(elements), size = uint(e_size)}},
+	)
+	return bindings
+}
 
 // world_ui_camera :: proc() -> rl.Camera2D {
 // 	w := f32(rl.GetScreenWidth())
