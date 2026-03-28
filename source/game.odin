@@ -74,6 +74,9 @@ init :: proc() {
 
 	// TEST: cube
 
+
+	
+
 	//odinfmt: disable
 	vertices := [?]f32 {
         -1.0, -1.0, -1.0,   1.0, 0.0, 0.0, 1.0,
@@ -256,12 +259,19 @@ input :: proc() {
 
 	if g.mouse.wheel != 0 {
 		g.world_camera.distance += g.mouse.wheel * 0.5
+		g.world_camera.distance = clamp(g.world_camera.distance, 0.01, 50)
 	}
 
-	move = linalg.normalize0(move)
-	g.world_camera.position.xy += move * dt * 5 * g.world_camera.distance
+	// scale by distance
+	move = linalg.normalize0(move) * g.world_camera.distance
+	// rotate so movement axies are aligned to camera direction
+	sin_yaw := math.sin(g.world_camera.orbit.y)
+	cos_yaw := math.cos(g.world_camera.orbit.y)
+	move = {(move.x * cos_yaw) + (move.y * -sin_yaw), (move.y * cos_yaw) + (move.x * sin_yaw)}
+	g.world_camera.position.xy += move * dt * 3
 	g.world_camera.position.z = 0
 	g.world_camera.orbit.xy += rotate * math.PI * dt
+	g.world_camera.orbit.x = math.clamp(g.world_camera.orbit.x, 0, (math.PI / 2) - 0.001)
 	camera_update(&g.world_camera)
 }
 
@@ -341,10 +351,13 @@ cam_mvp :: proc(cam: Camera) -> matrix[4, 4]f32 {
 camera_update :: proc(cam: ^Camera) {
 	aspect := sapp.widthf() / sapp.heightf()
 	projection := linalg.matrix4_perspective(math.to_radians(cam.fovy), aspect, 0.01, 100)
+	sphere_pos := [3]f32 {
+		math.sin(cam.orbit.y) * math.cos(cam.orbit.x),
+		-math.cos(cam.orbit.y) * math.cos(cam.orbit.x),
+		math.sin(cam.orbit.x),
+	}
 	view := linalg.matrix4_look_at(
-		cam.position +
-		([3]f32{math.sin(cam.orbit.y), -math.cos(cam.orbit.y), math.sin(cam.orbit.x)} *
-				cam.distance),
+		cam.position + (sphere_pos * cam.distance),
 		cam.position,
 		[3]f32{0, 0, 1},
 	)
@@ -430,14 +443,44 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 			cbW := -verts_per_hex
 			cbSE := -(verts_per_hex * mesh_width)
 			cbSW := cbSE - verts_per_hex
-			basis_indicies := [?]int{
-          0, 1, 2, 3, 10, 4,
-          0, 2, cbSE + 1, 4, 11, 5,
-          0, cbSE + 1, cbSW + 2, 5, cbSE + 9, 6,
-          0, cbSW + 2, cbSW + 1, 6, cbSW + 10, 7,
-          0, cbSW + 1, cbW + 2, 7, cbW + 11, 8,
-          0, cbW + 2, 1, 8, 9, 3
-      }
+			basis_indicies := [?]int {
+				0,
+				1,
+				2,
+				3,
+				10,
+				4,
+				0,
+				2,
+				cbSE + 1,
+				4,
+				11,
+				5,
+				0,
+				cbSE + 1,
+				cbSW + 2,
+				5,
+				cbSE + 9,
+				6,
+				0,
+				cbSW + 2,
+				cbSW + 1,
+				6,
+				cbSW + 10,
+				7,
+				0,
+				cbSW + 1,
+				cbW + 2,
+				7,
+				cbW + 11,
+				8,
+				0,
+				cbW + 2,
+				1,
+				8,
+				9,
+				3,
+			}
 			// hextant : quadrant, but 6 of them (slice is overloaded term)
 			hextant_relative_indicies := [?]int{0, 3, 5, 1, 4, 3, 4, 2, 5, 3, 4, 5}
 			for h in 0 ..< 6 {
