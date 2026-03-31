@@ -1,5 +1,6 @@
 package game
 
+import "core:image"
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
@@ -32,6 +33,7 @@ Game_Memory :: struct {
 	// ui_camera:        rl.Camera2D,
 	terrain_pipeline: sg.Pipeline,
 	terrain_bindings: sg.Bindings,
+	cube_pipeline:    sg.Pipeline,
 	cube_bindings:    sg.Bindings,
 	textures:         [dynamic]sg.Image,
 	// queries for access to sim data
@@ -73,10 +75,6 @@ init :: proc() {
 	//append(&g.textures, rl.LoadTexture("assets/round_cat.png")) TODO different image loader
 
 	// TEST: cube
-
-
-	
-
 	//odinfmt: disable
 	vertices := [?]f32 {
         -1.0, -1.0, -1.0,   1.0, 0.0, 0.0, 1.0,
@@ -124,10 +122,7 @@ init :: proc() {
 	g.cube_bindings.index_buffer = sg.make_buffer(
 		{usage = {index_buffer = true}, data = {ptr = &indices, size = size_of(indices)}},
 	)
-
-	g.terrain_bindings = make_terrain_mesh(sim.CHUNK_SIZE)
-
-	g.terrain_pipeline = sg.make_pipeline(
+	g.cube_pipeline = sg.make_pipeline(
 		{
 			shader = sg.make_shader(shader.cube_shader_desc(sg.query_backend())),
 			layout = {
@@ -143,11 +138,58 @@ init :: proc() {
 		},
 	)
 
+	g.terrain_bindings = make_terrain_mesh(sim.CHUNK_SIZE)
+
+	g.terrain_pipeline = sg.make_pipeline(
+		{
+			shader = sg.make_shader(shader.dynamic_shader_desc(sg.query_backend())),
+			layout = {
+				buffers = {0 = {stride = 16}},
+				attrs = {
+					shader.ATTR_terrain_dynamic_position = {format = .FLOAT2},
+					shader.ATTR_terrain_dynamic_cell_uv = {format = .FLOAT2},
+				},
+			},
+			index_type = .UINT16,
+			cull_mode = .BACK,
+			depth = {write_enabled = true, compare = .LESS_EQUAL},
+		},
+	)
+
 	sim.init(&g.sim_state)
 	g.plane_q = ecs.query_init(
 		g.sim_state.world,
 		&{terms = {0 = {id = ecs.id(g.sim_state.world, sim.Plane)}}},
 	)
+	
+	plane_it := ecs.query_iter(g.sim_state.world, g.plane_q)
+	plane_entity := ecs.iter_first(&plane_it)
+	plane := ecs.get(g.sim_state.world, plane_entity, sim.Plane)
+	buffer_size := int(sg.query_surface_pitch(.R8, sim.CHUNK_SIZE, sim.CHUNK_SIZE, 1))
+	format_info := sg.query_pixelformat(.R8)
+	image_buffer := make([]i8, buffer_size, context.temp_allocator)
+	pixel := 0
+	for cell in plane.chunks[0].data {
+		image_buffer[pixel] = cell.height
+		pixel += int(format_info.bytes_per_pixel)
+	}
+	
+	g.terrain_bindings.views[shader.VIEW_terrain_heightmap] = sg.make_view({
+		texture = {
+			image = sg.make_image({
+				width = sim.CHUNK_SIZE,
+				height = sim.CHUNK_SIZE,
+				data = {
+					mip_levels = {
+						0 = {ptr = raw_data(image_buffer), size = uint(buffer_size)}
+					}
+				},
+				pixel_format = .R8
+			})
+		}
+	})
+	
+	g.terrain_bindings.samplers[shader.SMP_terrain_smp] = sg.make_sampler({})
 }
 
 fini :: proc() {
@@ -216,6 +258,7 @@ input :: proc() {
 
 	move: [2]f32
 	rotate: [2]f32
+	zoom: f32
 
 	if keys[.DOWN].down || keys[.W].down {
 		move.y += 1
@@ -242,12 +285,19 @@ input :: proc() {
 	if keys[.F].down {
 		rotate.x -= 1
 	}
+	
+	if keys[.Z].down {
+		zoom -= 1 * 0.4
+	}
+	if keys[.X].down {
+		zoom += 1 * 0.4
+	}
 
 	if keys[.SPACE].pressed {
 		g.sim_run = !g.sim_run
 	}
 
-	if keys[.R].pressed {
+	if keys[.G].pressed {
 		sim.fini(&g.sim_state)
 		g.sim_state.seed = rand.uint32()
 		sim.init(&g.sim_state)
@@ -258,8 +308,11 @@ input :: proc() {
 	}
 
 	if g.mouse.wheel != 0 {
-		g.world_camera.distance += g.mouse.wheel * 0.5
-		g.world_camera.distance = clamp(g.world_camera.distance, 0.01, 50)
+		zoom = g.mouse.wheel * 0.5
+	}
+	
+	if zoom != 0 {
+		g.world_camera.distance = clamp(g.world_camera.distance + zoom, 0.01, 50)
 	}
 
 	// scale by distance
@@ -280,8 +333,6 @@ draw :: proc(sim_state_interp: f32) {
 	defer sg.commit()
 
 	world: {
-
-
 		sg.begin_pass(
 			{
 				action = {colors = {0 = {load_action = .CLEAR, clear_value = {0.5, 0.5, 0.5, 1}}}},
@@ -290,19 +341,21 @@ draw :: proc(sim_state_interp: f32) {
 		)
 		defer sg.end_pass()
 
-		sg.apply_pipeline(g.terrain_pipeline)
-		// test cube
-		sg.apply_bindings(g.cube_bindings)
 		vs_params := shader.Vs_Params {
 			mvp = cam_mvp(g.world_camera),
 		}
-		sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
-		//sg.draw(0, 36, 1)
-
+		
 		// test generated terrain
+		sg.apply_pipeline(g.terrain_pipeline)
 		sg.apply_bindings(g.terrain_bindings)
-		sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
+		sg.apply_uniforms(shader.UB_terrain_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
 		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 1)
+		
+		// test cube
+		// sg.apply_pipeline(g.cube_pipeline)
+		// sg.apply_bindings(g.cube_bindings)
+		// sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
+		// sg.draw(0, 36, 1)
 
 		// Draw map with prims
 		it := ecs.query_iter(s.world, g.plane_q)
@@ -390,36 +443,34 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 		{-inner_radius, half_edge},
 	}
 
-	vertex_floats := 7 // 4 for color for default shader
+	vertex_floats :: 2 + 2 // 2 for xy position, 2 for cell coordinates
 	verts := make([]f32, vertex_count * vertex_floats, context.temp_allocator)
 	elements := make([]u16, element_count, context.temp_allocator)
 
 	v_index := 0
-	add_vert :: #force_inline proc(position: [2]f32, verts: []f32, index: ^int) {
-		vd := verts[(index^ * 7):(index^ * 7) + 7]
+	add_vert :: #force_inline proc(position: [2]f32, cell: [2]int, verts: []f32, index: ^int) {
+		vd := verts[(index^ * vertex_floats):(index^ * vertex_floats) + vertex_floats]
 		vd[0] = position.x
 		vd[1] = position.y
-		vd[3] = rand.float32()
-		vd[4] = rand.float32()
-		vd[5] = rand.float32()
-		vd[6] = 1.0
+		vd[2] = f32(cell.x) / 64
+		vd[3] = f32(cell.y) / 64
 		index^ += 1
 	}
 
-	// verticies
+	// vertices
 	for y in -1 ..< mesh_height - 1 {
 		for x in -1 ..< mesh_width - 1 {
 			hex_position := sim.grid_to_vec({i32(x), i32(y)})
 			// first tri in hex
 			for v in 0 ..< 3 {
-				add_vert(hex_position + vert_positions[v], verts, &v_index)
+				add_vert(hex_position + vert_positions[v], {x, y}, verts, &v_index)
 			}
 			// vert in center of each hex spoke
 			for v in 0 ..< 6 {
 				p1 := vert_positions[0]
 				p2 := vert_positions[v + 1]
 				pos := (p1 + p2) / 2
-				add_vert(hex_position + pos, verts, &v_index)
+				add_vert(hex_position + pos, {x, y}, verts, &v_index)
 			}
 			// outside corner verts owned by this cell
 			edge_indicies := [4]u16{6, 1, 2, 3}
@@ -427,7 +478,7 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 				p1 := vert_positions[edge_indicies[v]]
 				p2 := vert_positions[edge_indicies[v + 1]]
 				pos := (p1 + p2) / 2
-				add_vert(hex_position + pos, verts, &v_index)
+				add_vert(hex_position + pos, {x, y}, verts, &v_index)
 			}
 		}
 	}
