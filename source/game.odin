@@ -31,10 +31,13 @@ Game_Memory :: struct {
 	world_camera:     Camera,
 	// world_ui_camera:  rl.Camera2D,
 	// ui_camera:        rl.Camera2D,
+	erosion_pipeline: sg.Pipeline,
+	erosion_bindings: sg.Bindings,
 	terrain_pipeline: sg.Pipeline,
 	terrain_bindings: sg.Bindings,
 	cube_pipeline:    sg.Pipeline,
 	cube_bindings:    sg.Bindings,
+	heightmap_image:  sg.Image,
 	textures:         [dynamic]sg.Image,
 	// queries for access to sim data
 	plane_q:          ^ecs.Query,
@@ -137,8 +140,47 @@ init :: proc() {
 			depth = {write_enabled = true, compare = .LESS_EQUAL},
 		},
 	)
+	
+	// make storage texture for height map input and erosion map intermediate
+	g.heightmap_image = sg.make_image({
+		width = sim.CHUNK_SIZE,
+		height = sim.CHUNK_SIZE,
+		pixel_format = .RGBA8SI,
+		usage = {
+			dynamic_update = true,
+		},
+	})
+	
+	erosion_image := sg.make_image({
+		width = 1024,
+		height = 1024,
+		pixel_format = .R32F,
+		usage = {
+			storage_image = true,
+			immutable = true,
+		},
+	})
+	
+	g.erosion_bindings.views[shader.VIEW_terrain_base_map] = sg.make_view({
+		texture = {image = g.heightmap_image}
+	})
+	g.erosion_bindings.views[shader.VIEW_terrain_erosion_map] = sg.make_view({
+		storage_image = {image = erosion_image}
+	})
+	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({mag_filter = .NEAREST, min_filter = .NEAREST, mipmap_filter = .NEAREST})
+	
+	g.erosion_pipeline = sg.make_pipeline({
+		shader = sg.make_shader(shader.erosion_shader_desc(sg.query_backend())),
+		compute = true,
+	})
 
 	g.terrain_bindings = make_terrain_mesh(sim.CHUNK_SIZE)
+	g.terrain_bindings.views[shader.VIEW_terrain_heightmap] = sg.make_view({
+		texture = {
+			image = erosion_image
+		}
+	})
+	g.terrain_bindings.samplers[shader.SMP_terrain_smp] = sg.make_sampler({})
 
 	g.terrain_pipeline = sg.make_pipeline(
 		{
@@ -165,31 +207,23 @@ init :: proc() {
 	plane_it := ecs.query_iter(g.sim_state.world, g.plane_q)
 	plane_entity := ecs.iter_first(&plane_it)
 	plane := ecs.get(g.sim_state.world, plane_entity, sim.Plane)
-	buffer_size := int(sg.query_surface_pitch(.R8, sim.CHUNK_SIZE, sim.CHUNK_SIZE, 1))
-	format_info := sg.query_pixelformat(.R8)
+	buffer_size := int(sg.query_surface_pitch(.RGBA8SI, sim.CHUNK_SIZE, sim.CHUNK_SIZE, 1))
+	format_info := sg.query_pixelformat(.RGBA8SI)
 	image_buffer := make([]i8, buffer_size, context.temp_allocator)
 	pixel := 0
 	for cell in plane.chunks[0].data {
 		image_buffer[pixel] = cell.height
+		// TODO: other attributes in this data texture
 		pixel += int(format_info.bytes_per_pixel)
 	}
-	
-	g.terrain_bindings.views[shader.VIEW_terrain_heightmap] = sg.make_view({
-		texture = {
-			image = sg.make_image({
-				width = sim.CHUNK_SIZE,
-				height = sim.CHUNK_SIZE,
-				data = {
-					mip_levels = {
-						0 = {ptr = raw_data(image_buffer), size = uint(buffer_size)}
-					}
-				},
-				pixel_format = .R8
-			})
+	sg.update_image(
+		g.heightmap_image, 
+		{
+			mip_levels = {
+				0 = {ptr = raw_data(image_buffer), size = uint(buffer_size)}
+			}
 		}
-	})
-	
-	g.terrain_bindings.samplers[shader.SMP_terrain_smp] = sg.make_sampler({})
+	)
 }
 
 fini :: proc() {
@@ -331,6 +365,13 @@ input :: proc() {
 draw :: proc(sim_state_interp: f32) {
 	s := g.sim_state
 	defer sg.commit()
+	
+	// compute prepass
+	sg.begin_pass({compute = true})
+	sg.apply_pipeline(g.erosion_pipeline)
+	sg.apply_bindings(g.erosion_bindings)
+	sg.dispatch(sim.CHUNK_SIZE, sim.CHUNK_SIZE, 1)
+	sg.end_pass()
 
 	world: {
 		sg.begin_pass(
