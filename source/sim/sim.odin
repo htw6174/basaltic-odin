@@ -7,6 +7,8 @@ import "core:math/rand"
 // Sim timesteps always represent a fixed time interval. Use to convert to seconds for rendering and set speeds based on seconds.
 STEPS_PER_SECOND :: 60
 
+WORLD_SIZE :: CHUNK_SIZE * 4
+
 State :: struct {
 	step:  int,
 	seed:  u32,

@@ -33,6 +33,15 @@ case $(uname) in
     ;;
 esac
 
+# Compile shaders to Odin for sokol_gfx
+echo "Building shaders"
+if command -v sokol-shdc &> /dev/null; then
+    bash ./build_shaders.sh sokol-shdc
+else
+    echo "WARNING: sokol-shdc not found on PATH, skipping shader build"
+fi
+
+
 # Build the game. Note that the game goes into $OUT_DIR while the exe stays in
 # the root folder.
 echo "Building game$DLL_EXT"

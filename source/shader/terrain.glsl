@@ -25,7 +25,7 @@ void main() {
   
   // convert out_texel to barycentric coord to interpolate input samples
   
-  float h = float(h0);
+  float h = float(h0) / 128.0;
   
   imageStore(erosion_map, out_texel, vec4(h, 0., 0., 0.));
 }
@@ -36,24 +36,55 @@ void main() {
 layout(binding=0) uniform texture2D heightmap;
 layout(binding=0) uniform sampler smp;
 
+// TODO: set with uniform
+const ivec2 map_size = ivec2(128);
+
+// per-instance
+in vec2 instance_position;
+in ivec2 instance_coord;
+// per-vertex
 in vec2 position;
-in vec2 cell_uv;
+in ivec2 vertex_coord;
 
 out vec4 color;
+flat out ivec2 cell_coord;
 
 void main() {
-    vec4 height = texture(sampler2D(heightmap, smp), cell_uv);
-    gl_Position = mvp * vec4(position, height.x * 10., 1);
-    color = vec4(height.x, 0, 1. - height.x, 1.);
+    cell_coord = instance_coord + vertex_coord;
+    vec2 cell_uv = vec2(cell_coord) / vec2(map_size);
+    float height = texture(sampler2D(heightmap, smp), cell_uv).x;
+    gl_Position = mvp * vec4(instance_position + position, height * 10., 1.);
+    //gl_Position = mvp * vec4(instance_position + position, 0., 1.);
+    color = vec4(height.x, 0, 1. - height, 1.);
 }
 @end
 
 @fs fs
 in vec4 color;
+flat in ivec2 cell_coord;
 out vec4 frag_color;
 
+uint ihash(uint n)
+{
+    n = (n ^ 61u) ^ (n >> 16u);
+    n *= 9u;
+    n = n ^ (n >> 4u);
+    n *= 0x27d4eb2du;
+    return n ^ (n >> 15u);
+}
+
+vec3 ihash3(int n)
+{
+  return vec3(
+    float(ihash(uint(n))) / 4294967295.0,
+    float(ihash(uint(n + 1u))) / 4294967295.0,
+    float(ihash(uint(n + 2u))) / 4294967295.0
+  );
+}
+
 void main() {
-    frag_color = color;
+  frag_color = color;
+  //frag_color = vec4(ihash3(gl_PrimitiveID), 1.0);
 }
 @end
 

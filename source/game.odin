@@ -38,6 +38,7 @@ Game_Memory :: struct {
 	cube_pipeline:    sg.Pipeline,
 	cube_bindings:    sg.Bindings,
 	heightmap_image:  sg.Image,
+	terrain_dirty:    bool,
 	textures:         [dynamic]sg.Image,
 	// queries for access to sim data
 	plane_q:          ^ecs.Query,
@@ -141,10 +142,10 @@ init :: proc() {
 		},
 	)
 	
-	// make storage texture for height map input and erosion map intermediate
+	// make dynamic texture for height map input and storage texture for erosion map intermediate
 	g.heightmap_image = sg.make_image({
-		width = sim.CHUNK_SIZE,
-		height = sim.CHUNK_SIZE,
+		width = sim.WORLD_SIZE,
+		height = sim.WORLD_SIZE,
 		pixel_format = .RGBA8SI,
 		usage = {
 			dynamic_update = true,
@@ -152,8 +153,9 @@ init :: proc() {
 	})
 	
 	erosion_image := sg.make_image({
-		width = 1024,
-		height = 1024,
+		// (total map size) * (compute work group size)
+		width = sim.WORLD_SIZE * 8,
+		height = sim.WORLD_SIZE * 8,
 		pixel_format = .R32F,
 		usage = {
 			storage_image = true,
@@ -167,7 +169,7 @@ init :: proc() {
 	g.erosion_bindings.views[shader.VIEW_terrain_erosion_map] = sg.make_view({
 		storage_image = {image = erosion_image}
 	})
-	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({mag_filter = .NEAREST, min_filter = .NEAREST, mipmap_filter = .NEAREST})
+	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({})
 	
 	g.erosion_pipeline = sg.make_pipeline({
 		shader = sg.make_shader(shader.erosion_shader_desc(sg.query_backend())),
@@ -175,6 +177,19 @@ init :: proc() {
 	})
 
 	g.terrain_bindings = make_terrain_mesh(sim.CHUNK_SIZE)
+	Instance_Data :: struct {
+		pos: [2]f32,
+		cell: sim.Grid_Coord,
+	}
+	instance_buffer: [16]Instance_Data
+	for &inst, i in instance_buffer {
+		cell := sim.Grid_Coord{(i32(i) % 4) * sim.CHUNK_SIZE, (i32(i) / 4) * sim.CHUNK_SIZE}
+		inst.pos = sim.grid_to_vec(cell)
+		inst.cell = cell
+	}
+	g.terrain_bindings.vertex_buffers[0] = sg.make_buffer({
+		data = {ptr = raw_data(&instance_buffer), size = size_of(instance_buffer)}
+	})
 	g.terrain_bindings.views[shader.VIEW_terrain_heightmap] = sg.make_view({
 		texture = {
 			image = erosion_image
@@ -186,10 +201,15 @@ init :: proc() {
 		{
 			shader = sg.make_shader(shader.dynamic_shader_desc(sg.query_backend())),
 			layout = {
-				buffers = {0 = {stride = 16}},
+				buffers = {
+					0 = {step_func = .PER_INSTANCE},
+					1 = {step_func = .PER_VERTEX}
+				},
 				attrs = {
-					shader.ATTR_terrain_dynamic_position = {format = .FLOAT2},
-					shader.ATTR_terrain_dynamic_cell_uv = {format = .FLOAT2},
+					shader.ATTR_terrain_dynamic_instance_position = {format = .FLOAT2},
+					shader.ATTR_terrain_dynamic_instance_coord = {format = .INT2},
+					shader.ATTR_terrain_dynamic_position = {format = .FLOAT2, buffer_index = 1},
+					shader.ATTR_terrain_dynamic_vertex_coord = {format = .INT2, buffer_index = 1},
 				},
 			},
 			index_type = .UINT16,
@@ -204,26 +224,7 @@ init :: proc() {
 		&{terms = {0 = {id = ecs.id(g.sim_state.world, sim.Plane)}}},
 	)
 	
-	plane_it := ecs.query_iter(g.sim_state.world, g.plane_q)
-	plane_entity := ecs.iter_first(&plane_it)
-	plane := ecs.get(g.sim_state.world, plane_entity, sim.Plane)
-	buffer_size := int(sg.query_surface_pitch(.RGBA8SI, sim.CHUNK_SIZE, sim.CHUNK_SIZE, 1))
-	format_info := sg.query_pixelformat(.RGBA8SI)
-	image_buffer := make([]i8, buffer_size, context.temp_allocator)
-	pixel := 0
-	for cell in plane.chunks[0].data {
-		image_buffer[pixel] = cell.height
-		// TODO: other attributes in this data texture
-		pixel += int(format_info.bytes_per_pixel)
-	}
-	sg.update_image(
-		g.heightmap_image, 
-		{
-			mip_levels = {
-				0 = {ptr = raw_data(image_buffer), size = uint(buffer_size)}
-			}
-		}
-	)
+	update_heightmap()
 }
 
 fini :: proc() {
@@ -339,6 +340,7 @@ input :: proc() {
 			g.sim_state.world,
 			&{terms = {0 = {id = ecs.id(g.sim_state.world, sim.Plane)}}},
 		)
+		g.terrain_dirty = true
 	}
 
 	if g.mouse.wheel != 0 {
@@ -346,7 +348,7 @@ input :: proc() {
 	}
 	
 	if zoom != 0 {
-		g.world_camera.distance = clamp(g.world_camera.distance + zoom, 0.01, 50)
+		g.world_camera.distance = clamp(g.world_camera.distance + zoom, 0.01, 100)
 	}
 
 	// scale by distance
@@ -358,7 +360,7 @@ input :: proc() {
 	g.world_camera.position.xy += move * dt * 3
 	g.world_camera.position.z = 0
 	g.world_camera.orbit.xy += rotate * math.PI * dt
-	g.world_camera.orbit.x = math.clamp(g.world_camera.orbit.x, 0, (math.PI / 2) - 0.001)
+	g.world_camera.orbit.x = math.clamp(g.world_camera.orbit.x, -(math.PI / 2) + 0.001, (math.PI / 2) - 0.001)
 	camera_update(&g.world_camera)
 }
 
@@ -366,12 +368,10 @@ draw :: proc(sim_state_interp: f32) {
 	s := g.sim_state
 	defer sg.commit()
 	
-	// compute prepass
-	sg.begin_pass({compute = true})
-	sg.apply_pipeline(g.erosion_pipeline)
-	sg.apply_bindings(g.erosion_bindings)
-	sg.dispatch(sim.CHUNK_SIZE, sim.CHUNK_SIZE, 1)
-	sg.end_pass()
+	if g.terrain_dirty {
+		update_heightmap()
+		g.terrain_dirty = false
+	}
 
 	world: {
 		sg.begin_pass(
@@ -390,33 +390,13 @@ draw :: proc(sim_state_interp: f32) {
 		sg.apply_pipeline(g.terrain_pipeline)
 		sg.apply_bindings(g.terrain_bindings)
 		sg.apply_uniforms(shader.UB_terrain_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
-		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 1)
+		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 16)
 		
 		// test cube
-		// sg.apply_pipeline(g.cube_pipeline)
-		// sg.apply_bindings(g.cube_bindings)
-		// sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
-		// sg.draw(0, 36, 1)
-
-		// Draw map with prims
-		it := ecs.query_iter(s.world, g.plane_q)
-		for ecs.query_next(&it) {
-			planes := ecs.field(&it, sim.Plane, 0)
-			for i in 0 ..< it.count {
-				plane := planes[i]
-				for chunk in plane.chunks {
-					for cell, c in chunk.data {
-						pos := sim.grid_to_vec(sim.chunk_cell_to_grid(chunk.origin, c))
-						_ = pos
-						// rl.DrawCubeV(
-						// 	{pos.x, pos.y, f32(cell.height) / 10},
-						// 	{1, 1, 1},
-						// 	rl.ColorLerp(rl.BLUE, rl.RED, f32(cell.height) / 128),
-						// )
-					}
-				}
-			}
-		}
+		sg.apply_pipeline(g.cube_pipeline)
+		sg.apply_bindings(g.cube_bindings)
+		sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
+		sg.draw(0, 36, 1)
 	}
 
 	world_ui: {
@@ -436,6 +416,41 @@ draw :: proc(sim_state_interp: f32) {
 	}
 }
 
+update_heightmap :: proc() {
+	plane_it := ecs.query_iter(g.sim_state.world, g.plane_q)
+	plane_entity := ecs.iter_first(&plane_it)
+	plane := ecs.get(g.sim_state.world, plane_entity, sim.Plane)
+	buffer_size := int(sg.query_surface_pitch(.RGBA8SI, sim.WORLD_SIZE, sim.WORLD_SIZE, 1))
+	format_info := sg.query_pixelformat(.RGBA8SI)
+	// TODO: persist this buffer
+	image_buffer := make([]i8, buffer_size, context.temp_allocator)
+	for chunk, chunk_idx in plane.chunks {
+		// TODO: replace hardcoded chunk counts
+		chunk_coord := sim.Grid_Coord{i32(chunk_idx % 4) * sim.CHUNK_SIZE, i32(chunk_idx / 4) * sim.CHUNK_SIZE}
+		for cell, cell_idx in chunk.data {
+			cell_coord := sim.chunk_cell_to_grid(chunk_coord, cell_idx)
+			texel := int(cell_coord.x + (cell_coord.y * sim.WORLD_SIZE))
+			buffer_idx := texel * int(format_info.bytes_per_pixel)
+			image_buffer[buffer_idx] = cell.height
+			// TODO: other attributes in this data texture
+		}
+	}
+	sg.update_image(
+		g.heightmap_image, 
+		{
+			mip_levels = {
+				0 = {ptr = raw_data(image_buffer), size = uint(buffer_size)}
+			}
+		}
+	)
+	
+	sg.begin_pass({compute = true})
+	sg.apply_pipeline(g.erosion_pipeline)
+	sg.apply_bindings(g.erosion_bindings)
+	sg.dispatch(sim.WORLD_SIZE, sim.WORLD_SIZE, 1)
+	sg.end_pass()
+}
+
 cam_mvp :: proc(cam: Camera) -> matrix[4, 4]f32 {
 	model := linalg.MATRIX4F32_IDENTITY
 
@@ -444,7 +459,7 @@ cam_mvp :: proc(cam: Camera) -> matrix[4, 4]f32 {
 
 camera_update :: proc(cam: ^Camera) {
 	aspect := sapp.widthf() / sapp.heightf()
-	projection := linalg.matrix4_perspective(math.to_radians(cam.fovy), aspect, 0.01, 100)
+	projection := linalg.matrix4_perspective(math.to_radians(cam.fovy), aspect, 0.01, 1000)
 	sphere_pos := [3]f32 {
 		math.sin(cam.orbit.y) * math.cos(cam.orbit.x),
 		-math.cos(cam.orbit.y) * math.cos(cam.orbit.x),
@@ -484,17 +499,18 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 		{-inner_radius, half_edge},
 	}
 
-	vertex_floats :: 2 + 2 // 2 for xy position, 2 for cell coordinates
-	verts := make([]f32, vertex_count * vertex_floats, context.temp_allocator)
+	Vertex_Data :: struct {
+		pos: [2]f32,
+		idx: [2]i32,
+	}
+	verts := make([]Vertex_Data, vertex_count, context.temp_allocator)
 	elements := make([]u16, element_count, context.temp_allocator)
 
 	v_index := 0
-	add_vert :: #force_inline proc(position: [2]f32, cell: [2]int, verts: []f32, index: ^int) {
-		vd := verts[(index^ * vertex_floats):(index^ * vertex_floats) + vertex_floats]
-		vd[0] = position.x
-		vd[1] = position.y
-		vd[2] = f32(cell.x) / 64
-		vd[3] = f32(cell.y) / 64
+	add_vert :: #force_inline proc(position: [2]f32, cell: [2]int, verts: []Vertex_Data, index: ^int) {
+		vd := &verts[index^]
+		vd.pos = position
+		vd.idx = {i32(cell.x), i32(cell.y)}
 		index^ += 1
 	}
 
@@ -590,7 +606,7 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 	v_size := slice.size(verts)
 	e_size := slice.size(elements)
 
-	bindings.vertex_buffers[0] = sg.make_buffer(
+	bindings.vertex_buffers[1] = sg.make_buffer(
 		{data = {ptr = raw_data(verts), size = uint(v_size)}},
 	)
 	bindings.index_buffer = sg.make_buffer(
