@@ -5,6 +5,9 @@ import "core:math"
 
 CHUNK_SIZE :: 32
 
+//sqrt(3/4)
+Y_FACTOR :: 0.8660254040
+
 Grid_Coord :: distinct [2]i32
 Cube_Coord :: distinct [3]i32
 
@@ -42,7 +45,11 @@ chunk_cell_to_grid :: proc "contextless" (origin: Grid_Coord, cell_index: int) -
 grid_to_vec :: proc "contextless" (grid: Grid_Coord) -> [2]f32 {
 	x := f32(grid.x)
 	y := f32(grid.y)
-	return {x - (y * 0.5), y * 0.8660254040} //sqrt(3/4)
+	return {x - (y * 0.5), y * Y_FACTOR}
+}
+
+cartesian_to_axial :: proc "contextless" (pos: [2]f32) -> [2]f32 {
+	return {pos.x + (pos.y * 0.5 / Y_FACTOR), -pos.y * (1 / Y_FACTOR)}
 }
 
 xxh_2d :: proc "contextless" (seed: u32, x, y: i32) -> f32 {

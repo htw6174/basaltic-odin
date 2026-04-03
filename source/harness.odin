@@ -40,8 +40,6 @@ game_update :: proc() {
 @(export)
 game_init :: proc() {
 	init()
-
-	game_hot_reloaded(g)
 }
 
 @(export)
@@ -75,6 +73,7 @@ game_hot_reloaded :: proc(mem: rawptr) {
 
 	// Here you can also set your own global variables. A good idea is to make
 	// your global variables into pointers that point to something inside `g`.
+	reload_shaders()
 }
 
 // In a web build, this is called when browser changes size. Remove the

@@ -31,13 +31,16 @@ Game_Memory :: struct {
 	world_camera:     Camera,
 	// world_ui_camera:  rl.Camera2D,
 	// ui_camera:        rl.Camera2D,
+	erosion_shader:   sg.Shader,
 	erosion_pipeline: sg.Pipeline,
 	erosion_bindings: sg.Bindings,
+	terrain_shader:   sg.Shader,
 	terrain_pipeline: sg.Pipeline,
 	terrain_bindings: sg.Bindings,
 	cube_pipeline:    sg.Pipeline,
 	cube_bindings:    sg.Bindings,
 	heightmap_image:  sg.Image,
+	erosion_image:    sg.Image,
 	terrain_dirty:    bool,
 	textures:         [dynamic]sg.Image,
 	// queries for access to sim data
@@ -70,7 +73,7 @@ init :: proc() {
 	g^ = Game_Memory {
 		run = true,
 		textures = make([dynamic]sg.Image, 0),
-		world_camera = {orbit = {math.PI / 8, math.PI / 8, 0}, distance = 10, fovy = 60},
+		world_camera = {orbit = {math.PI / 4, -math.PI / 6, 0}, distance = 50, fovy = 60},
 		tick_to_real = time.Second / 60,
 		time_last_frame = time.now(),
 		sim_run = true,
@@ -152,7 +155,7 @@ init :: proc() {
 		},
 	})
 	
-	erosion_image := sg.make_image({
+	g.erosion_image = sg.make_image({
 		// (total map size) * (compute work group size)
 		width = sim.WORLD_SIZE * 8,
 		height = sim.WORLD_SIZE * 8,
@@ -167,56 +170,32 @@ init :: proc() {
 		texture = {image = g.heightmap_image}
 	})
 	g.erosion_bindings.views[shader.VIEW_terrain_erosion_map] = sg.make_view({
-		storage_image = {image = erosion_image}
+		storage_image = {image = g.erosion_image}
 	})
 	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({})
 	
-	g.erosion_pipeline = sg.make_pipeline({
-		shader = sg.make_shader(shader.erosion_shader_desc(sg.query_backend())),
-		compute = true,
-	})
-
 	g.terrain_bindings = make_terrain_mesh(sim.CHUNK_SIZE)
 	Instance_Data :: struct {
 		pos: [2]f32,
-		cell: sim.Grid_Coord,
+		cell: [2]f32,
 	}
 	instance_buffer: [16]Instance_Data
 	for &inst, i in instance_buffer {
-		cell := sim.Grid_Coord{(i32(i) % 4) * sim.CHUNK_SIZE, (i32(i) / 4) * sim.CHUNK_SIZE}
+		cell := sim.Grid_Coord{i32(i % 4) * sim.CHUNK_SIZE, i32(i / 4) * sim.CHUNK_SIZE}
 		inst.pos = sim.grid_to_vec(cell)
-		inst.cell = cell
+		inst.cell = ([2]f32{f32(cell.x), f32(-cell.y)})
 	}
 	g.terrain_bindings.vertex_buffers[0] = sg.make_buffer({
 		data = {ptr = raw_data(&instance_buffer), size = size_of(instance_buffer)}
 	})
 	g.terrain_bindings.views[shader.VIEW_terrain_heightmap] = sg.make_view({
 		texture = {
-			image = erosion_image
+			image = g.erosion_image
 		}
 	})
 	g.terrain_bindings.samplers[shader.SMP_terrain_smp] = sg.make_sampler({})
-
-	g.terrain_pipeline = sg.make_pipeline(
-		{
-			shader = sg.make_shader(shader.dynamic_shader_desc(sg.query_backend())),
-			layout = {
-				buffers = {
-					0 = {step_func = .PER_INSTANCE},
-					1 = {step_func = .PER_VERTEX}
-				},
-				attrs = {
-					shader.ATTR_terrain_dynamic_instance_position = {format = .FLOAT2},
-					shader.ATTR_terrain_dynamic_instance_coord = {format = .INT2},
-					shader.ATTR_terrain_dynamic_position = {format = .FLOAT2, buffer_index = 1},
-					shader.ATTR_terrain_dynamic_vertex_coord = {format = .INT2, buffer_index = 1},
-				},
-			},
-			index_type = .UINT16,
-			cull_mode = .BACK,
-			depth = {write_enabled = true, compare = .LESS_EQUAL},
-		},
-	)
+	
+	make_pipelines()
 
 	sim.init(&g.sim_state)
 	g.plane_q = ecs.query_init(
@@ -229,8 +208,58 @@ init :: proc() {
 
 fini :: proc() {
 	delete(g.textures)
+	// TODO: need to either free all sokol_gfx resources, or call sg.setup() and sg.shutdown() on every hot reset
+	// This is enough to take care of all the low-limit and bulky resources for now
+	destroy_pipelines()
+	sg.destroy_image(g.erosion_image)
+	sg.destroy_image(g.heightmap_image)
 	sim.fini(&g.sim_state)
 	free(g)
+}
+
+reload_shaders :: proc() {
+	// dispose of existing shaders and pipelines
+	destroy_pipelines()
+	
+	// re-create shaders and pipelines
+	make_pipelines()
+}
+
+destroy_pipelines :: proc() {
+	sg.destroy_shader(g.erosion_shader)
+	sg.destroy_shader(g.terrain_shader)
+	sg.destroy_pipeline(g.erosion_pipeline)
+	sg.destroy_pipeline(g.terrain_pipeline)
+}
+
+make_pipelines :: proc() {
+	g.erosion_shader = sg.make_shader(shader.erosion_shader_desc(sg.query_backend()))
+	g.erosion_pipeline = sg.make_pipeline({
+		shader = g.erosion_shader,
+		compute = true,
+	})
+
+	g.terrain_shader = sg.make_shader(shader.dynamic_shader_desc(sg.query_backend()))
+	g.terrain_pipeline = sg.make_pipeline(
+		{
+			shader = g.terrain_shader,
+			layout = {
+				buffers = {
+					0 = {step_func = .PER_INSTANCE},
+					1 = {step_func = .PER_VERTEX}
+				},
+				attrs = {
+					shader.ATTR_terrain_dynamic_instance_position = {format = .FLOAT2},
+					shader.ATTR_terrain_dynamic_instance_axial = {format = .FLOAT2},
+					shader.ATTR_terrain_dynamic_position = {format = .FLOAT2, buffer_index = 1},
+					shader.ATTR_terrain_dynamic_vertex_axial = {format = .FLOAT2, buffer_index = 1},
+				},
+			},
+			index_type = .UINT16,
+			cull_mode = .BACK,
+			depth = {write_enabled = true, compare = .LESS_EQUAL},
+		},
+	)
 }
 
 update :: proc() {
@@ -322,10 +351,10 @@ input :: proc() {
 	}
 	
 	if keys[.Z].down {
-		zoom -= 1 * 0.4
+		zoom += 1 * 0.6
 	}
 	if keys[.X].down {
-		zoom += 1 * 0.4
+		zoom -= 1 * 0.6
 	}
 
 	if keys[.SPACE].pressed {
@@ -473,6 +502,19 @@ camera_update :: proc(cam: ^Camera) {
 	cam._vp = projection * view
 }
 
+barycentric :: proc(a, b, c: [2]f32) -> [3]f32 {
+	d00 := linalg.dot(b, b)
+	d01 := linalg.dot(b, c)
+	d11 := linalg.dot(c, c)
+	d20 := linalg.dot(a, b)
+	d21 := linalg.dot(a, c)
+	denom := d00 * d11 - d01 * d01
+	v := (d11 * d20 - d01 * d21) / denom
+	w := (d00 * d21 - d01 * d20) / denom
+	u := 1 - v - w
+	return {u, v, w}
+}
+
 make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 	// TODO: remove vertex color when proper shader is implemented
 	hex_count := width * width
@@ -501,7 +543,7 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 
 	Vertex_Data :: struct {
 		pos: [2]f32,
-		idx: [2]i32,
+		cell: [2]f32,
 	}
 	verts := make([]Vertex_Data, vertex_count, context.temp_allocator)
 	elements := make([]u16, element_count, context.temp_allocator)
@@ -510,7 +552,8 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 	add_vert :: #force_inline proc(position: [2]f32, cell: [2]int, verts: []Vertex_Data, index: ^int) {
 		vd := &verts[index^]
 		vd.pos = position
-		vd.idx = {i32(cell.x), i32(cell.y)}
+		//vd.cell = {f32(cell.x), f32(cell.y)}
+		vd.cell = sim.cartesian_to_axial(position)
 		index^ += 1
 	}
 
