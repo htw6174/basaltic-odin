@@ -76,7 +76,7 @@ init :: proc() {
 		world_camera = {orbit = {math.PI / 4, -math.PI / 6, 0}, distance = 50, fovy = 60},
 		tick_to_real = time.Second / 60,
 		time_last_frame = time.now(),
-		sim_run = true,
+		sim_run = false,
 		sim_state = {seed = 6174},
 	}
 	//append(&g.textures, rl.LoadTexture("assets/round_cat.png")) TODO different image loader
@@ -159,7 +159,7 @@ init :: proc() {
 		// (total map size) * (compute work group size)
 		width = sim.WORLD_SIZE * 8,
 		height = sim.WORLD_SIZE * 8,
-		pixel_format = .R32F,
+		pixel_format = .RGBA32F,
 		usage = {
 			storage_image = true,
 			immutable = true,
@@ -193,7 +193,7 @@ init :: proc() {
 			image = g.erosion_image
 		}
 	})
-	g.terrain_bindings.samplers[shader.SMP_terrain_smp] = sg.make_sampler({})
+	g.terrain_bindings.samplers[shader.SMP_terrain_smp] = sg.make_sampler({min_filter = .LINEAR, mag_filter = .LINEAR})
 	
 	make_pipelines()
 
@@ -223,6 +223,7 @@ reload_shaders :: proc() {
 	
 	// re-create shaders and pipelines
 	make_pipelines()
+	//g.terrain_dirty = true
 }
 
 destroy_pipelines :: proc() {
@@ -364,6 +365,18 @@ input :: proc() {
 	if keys[.G].pressed {
 		sim.fini(&g.sim_state)
 		g.sim_state.seed = rand.uint32()
+		sim.init(&g.sim_state)
+		g.plane_q = ecs.query_init(
+			g.sim_state.world,
+			&{terms = {0 = {id = ecs.id(g.sim_state.world, sim.Plane)}}},
+		)
+		g.terrain_dirty = true
+	}
+	
+	// TODO: should only mark terrain dirty, for now has to restart sim to work around component ID retrieval issue
+	if keys[.H].pressed {
+		sim.fini(&g.sim_state)
+		// Don't reset seed to keep same map
 		sim.init(&g.sim_state)
 		g.plane_q = ecs.query_init(
 			g.sim_state.world,

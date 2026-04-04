@@ -73,6 +73,7 @@ game_hot_reloaded :: proc(mem: rawptr) {
 
 	// Here you can also set your own global variables. A good idea is to make
 	// your global variables into pointers that point to something inside `g`.
+	// TODO: should have a general "on reload, do this" proc in game.odin
 	reload_shaders()
 }
 

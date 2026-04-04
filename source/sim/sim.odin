@@ -57,7 +57,7 @@ init :: proc(s: ^State) {
 			c.origin,
 			{CHUNK_SIZE, CHUNK_SIZE},
 			s.seed,
-			4,
+			8,
 			CHUNK_SIZE * 4,
 			2,
 		)
@@ -74,6 +74,7 @@ init :: proc(s: ^State) {
 
 fini :: proc(s: ^State) {
 	ecs.fini(s.world)
+	s.world = nil
 }
 
 step :: proc(s: ^State) {

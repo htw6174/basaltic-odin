@@ -84,20 +84,20 @@ simplex_2d :: proc "contextless" (x, y: f32, repeat_x, repeat_y: i32, seed: u32)
 	y1 := (iy + 1) % repeat_y
 
 	simplex: f32 = 0 if fraction_x > fraction_y else 1
-	//simplex: f32 = 0.0 if fraction_x + fraction_y < 1 else 1
+	//simplex: f32 = 0 if fraction_x + fraction_y < 1 else 1
 
 	// kernels - deterministic random values at closest simplex corners
 	k1 := xxh_2d(seed, x0, y0)
 	k2 := xxh_2d(seed, x1, y1)
 	k3 := xxh_2d(seed, x1, y0) if simplex == 0 else xxh_2d(seed, x0, y1)
 
+	// distance of sample from each corner, using cube coordinate distance
 	d1 := (abs(fraction_x - 0) + abs(fraction_x - fraction_y - 0 + 0) + abs(-fraction_y + 0)) / 2.0
 	d2 := (abs(fraction_x - 1) + abs(fraction_x - fraction_y - 1 + 1) + abs(-fraction_y + 1)) / 2.0
 	d3 :=
 		(abs(fraction_x - (1 - simplex)) +
-			abs(fraction_x - fraction_y - (1 - simplex) + simplex) +
-			abs(-fraction_y + simplex)) /
-		2.0
+		 abs(fraction_x - fraction_y - (1 - simplex) + simplex) +
+		 abs(-fraction_y + simplex)) / 2.0
 
 	c1 := k1 * (1 - d1)
 	c2 := k2 * (1 - d2)

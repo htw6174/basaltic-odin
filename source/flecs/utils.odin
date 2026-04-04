@@ -10,6 +10,7 @@ import "core:strings"
 
 /* Odin-specific replacements for flecs function-like macro utilities */
 
+// FIXME: the static idx doesn't survive dll reload, will return invalid id if world is not restarted immediately after reload
 component_index :: proc "contextless" ($T: typeid) -> i32 {
 	@(static) idx: i32
 	if idx == 0 {
