@@ -381,6 +381,15 @@ input :: proc() {
 		cell_data.height += 1
 		g.terrain_dirty = true
 	}
+	
+	if keys[.O].pressed {
+		plane_it := ecs.query_iter(g.sim_state.world, g.plane_q)
+		plane_entity := ecs.iter_first(&plane_it)
+		plane := ecs.get(g.sim_state.world, plane_entity, sim.Plane)
+		cell_data := sim.plane_get(plane, g.cell_cursor)
+		cell_data.height -= 1
+		g.terrain_dirty = true
+	}
 
 	if keys[.SPACE].pressed {
 		g.sim_run = !g.sim_run
@@ -579,18 +588,17 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 	}
 
 	Vertex_Data :: struct {
-		pos: [2]f32,
-		cell: [2]f32,
+		cartesian: [2]f32,
+		axial: [2]f32,
 	}
 	verts := make([]Vertex_Data, vertex_count, context.temp_allocator)
 	elements := make([]u16, element_count, context.temp_allocator)
 
 	v_index := 0
-	add_vert :: #force_inline proc(position: [2]f32, cell: [2]int, verts: []Vertex_Data, index: ^int) {
+	add_vert :: #force_inline proc(position: [2]f32, verts: []Vertex_Data, index: ^int) {
 		vd := &verts[index^]
-		vd.pos = position
-		//vd.cell = {f32(cell.x), f32(cell.y)}
-		vd.cell = sim.cartesian_to_axial(position)
+		vd.cartesian = position
+		vd.axial = sim.cartesian_to_axial(position)
 		index^ += 1
 	}
 
@@ -600,14 +608,14 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 			hex_position := sim.grid_to_vec({i32(x), i32(y)})
 			// first tri in hex
 			for v in 0 ..< 3 {
-				add_vert(hex_position + vert_positions[v], {x, y}, verts, &v_index)
+				add_vert(hex_position + vert_positions[v], verts, &v_index)
 			}
 			// vert in center of each hex spoke
 			for v in 0 ..< 6 {
 				p1 := vert_positions[0]
 				p2 := vert_positions[v + 1]
 				pos := (p1 + p2) / 2
-				add_vert(hex_position + pos, {x, y}, verts, &v_index)
+				add_vert(hex_position + pos, verts, &v_index)
 			}
 			// outside corner verts owned by this cell
 			edge_indicies := [4]u16{6, 1, 2, 3}
@@ -615,7 +623,7 @@ make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
 				p1 := vert_positions[edge_indicies[v]]
 				p2 := vert_positions[edge_indicies[v + 1]]
 				pos := (p1 + p2) / 2
-				add_vert(hex_position + pos, {x, y}, verts, &v_index)
+				add_vert(hex_position + pos, verts, &v_index)
 			}
 		}
 	}
