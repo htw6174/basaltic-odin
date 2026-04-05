@@ -49,7 +49,7 @@ Climate :: struct {
 }
 
 Chunk :: struct {
-	data:   #soa[]Cell_Data,
+	data:   []Cell_Data,
 	origin: Grid_Coord,
 }
 
@@ -90,6 +90,14 @@ plane_copy :: proc "c" (dst_ptr: rawptr, src_ptr: rawptr, count: i32, type_info:
 
 plane_move :: proc "c" (dst_ptr: rawptr, src_ptr: rawptr, count: i32, type_info: ^ecs.Type_Info) {
 	context = runtime.default_context()
+}
+
+plane_get :: proc(plane: ^Plane, coord: Grid_Coord) -> ^Cell_Data {
+	// Wrap coord to within plane bounds
+	// Translate coord to chunk and cell within chunk
+	// TODO can I make the return type of this cleaner while still allowing access to all components?
+	cell_data := &plane.chunks[0].data[coord.x + (coord.y * CHUNK_SIZE)]
+	return cell_data
 }
 
 update_plane :: proc "contextless" (plane: ^Plane) {

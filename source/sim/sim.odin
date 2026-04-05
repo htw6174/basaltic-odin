@@ -50,7 +50,7 @@ init :: proc(s: ^State) {
 
 	valuemap := make([]f32, CHUNK_SIZE * CHUNK_SIZE, allocator = context.temp_allocator)
 	for &c, i in plane.chunks {
-		c.data = make(#soa[]Cell_Data, CHUNK_SIZE * CHUNK_SIZE, allocator = plane.allocator)
+		c.data = make([]Cell_Data, CHUNK_SIZE * CHUNK_SIZE, allocator = plane.allocator)
 		c.origin = {i32(i % 4), i32(i / 4)} * CHUNK_SIZE
 		fill_grid_simplex(
 			valuemap,

@@ -43,6 +43,7 @@ Game_Memory :: struct {
 	erosion_image:    sg.Image,
 	terrain_dirty:    bool,
 	textures:         [dynamic]sg.Image,
+	cell_cursor:      sim.Grid_Coord,
 	// queries for access to sim data
 	plane_q:          ^ecs.Query,
 }
@@ -356,6 +357,29 @@ input :: proc() {
 	}
 	if keys[.X].down {
 		zoom -= 1 * 0.6
+	}
+	
+	// move cell cursor
+	if keys[.J].pressed {
+		g.cell_cursor.x -= 1
+	}
+	if keys[.L].pressed {
+		g.cell_cursor.x += 1
+	}
+	if keys[.K].pressed {
+		g.cell_cursor.y -= 1
+	}
+	if keys[.I].pressed {
+		g.cell_cursor.y += 1
+	}
+	
+	if keys[.U].pressed {
+		plane_it := ecs.query_iter(g.sim_state.world, g.plane_q)
+		plane_entity := ecs.iter_first(&plane_it)
+		plane := ecs.get(g.sim_state.world, plane_entity, sim.Plane)
+		cell_data := sim.plane_get(plane, g.cell_cursor)
+		cell_data.height += 1
+		g.terrain_dirty = true
 	}
 
 	if keys[.SPACE].pressed {
