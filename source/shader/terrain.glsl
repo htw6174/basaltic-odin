@@ -348,16 +348,23 @@ void main() {
   vec2 cell_axial = cell_grid * vec2(1., -1.);
   vec2 base_cell_axial = vec2(in_texel.x, -in_texel.y);
   vec2 local_axial = cell_axial - base_cell_axial;
-  float s = -local_axial.x - local_axial.y;
+ 	// cubic interpolation to smooth out first and second derivatives
+	// vec2 f = local_axial * vec2(1., -1.);
+	// f = f*f*(3.0-2.0*f);
+	// vec2 fa = f * vec2(1., -1.);
+	vec2 fa = local_axial;
+  float s = -fa.x - fa.y;
   // Determine simplex and convert axial coordinates to barycentric to interpolate samples
   // 0 on -s side, 1 on +s side
   float cell_simplex = ceil(s);
   vec3 barycentric; // blending factors for nearest 3 cells to this point
   if (cell_simplex == 0) {
-    barycentric = vec3(1. - local_axial.x, -local_axial.y, -s);
+    barycentric = vec3(1. - fa.x, -fa.y, -s);
   } else {
-    barycentric = vec3(1. + local_axial.y, local_axial.x, s);
+    barycentric = vec3(1. + fa.y, fa.x, s);
   }
+  // vec3 f = barycentric;
+  // barycentric = f*f*(3.0-2.0*f);
   // use .z or .x depending on simplex
   float height = (barycentric.x * samples.w) + 
                  (barycentric.y * samples.y) +
@@ -392,8 +399,8 @@ void main() {
   );
   
   // TODO: should use empty channels for normals calculated with all 7 closest samples
-  imageStore(erosion_map, out_texel, vec4(height + erode.x, erode.yz * 0.5 + 0.5, ridgeMap));
-  //imageStore(erosion_map, out_texel, vec4(height_and_slope.x, gradient * 0.5 + 0.5, 0.));
+  //imageStore(erosion_map, out_texel, vec4(height + erode.x, erode.yz * 0.5 + 0.5, ridgeMap));
+  imageStore(erosion_map, out_texel, vec4(height_and_slope.x, gradient * 0.5 + 0.5, 0.));
 }
 @end
 
@@ -518,12 +525,12 @@ float phong(vec3 normal, vec3 lightDir) {
 
 void main() {
   vec3 albedo;
-  albedo = color.www;
+  //albedo = color.www;
   //albedo = ihash3(gl_PrimitiveID);
   int cell_idx = int(round(cell_axial.x)) + (int(round(-cell_axial.y)) * map_size.x);
   //albedo = ihash3(cell_idx);
   //albedo = vec3(0.2, 0.7, 0.1);
-  //albedo = (normal * 0.5) + 0.5;
+  albedo = (normal * 0.5) + 0.5;
   float light = 1.;
   //float light = phong(normal, normalize(vec3(1., 1., 1.)));
   frag_color = vec4(albedo * light, 1.0);

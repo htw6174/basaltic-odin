@@ -57,12 +57,12 @@ init :: proc(s: ^State) {
 			c.origin,
 			{CHUNK_SIZE, CHUNK_SIZE},
 			s.seed,
-			4,
+			1,
 			CHUNK_SIZE * 4,
 			3,
 		)
 		for &cell, j in c.data {
-			cell.height = i8((valuemap[j] - 0.5) * 256)
+			cell.height = i8((valuemap[j] * 0.5) * 256)
 		}
 	}
 

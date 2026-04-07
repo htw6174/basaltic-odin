@@ -175,7 +175,7 @@ init :: proc() {
 	})
 	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({})
 	
-	COMPRESS :: 2
+	COMPRESS :: 1
 	//terrain_vertex_buffer, terrain_index_buffer := make_hex_grid_mesh(sim.CHUNK_SIZE)
 	terrain_vertex_buffer, terrain_index_buffer := make_hex_tri_mesh(60, f32(sim.CHUNK_SIZE) / (2 * COMPRESS))
 	Instance_Data :: struct {

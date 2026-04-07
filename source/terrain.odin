@@ -50,10 +50,6 @@ make_hex_tri_mesh :: proc(segments_per_side: int, inner_radius: f32) -> (vertex_
 			
 			t := f32(verts_from_corner) / f32(layer_side_verts)
 			pos := linalg.lerp(corner_a, corner_b, t)
-
-			// TEST: just put the verts on a circle
-			// theta := (f32(v) / f32(layer_verts)) * math.TAU
-			// pos := [2]f32{math.sin(theta), math.cos(theta)} * f32(layer) * edge_length
 			verts[vert] = {
 				cartesian = pos,
 				axial = sim.cartesian_to_axial(pos),

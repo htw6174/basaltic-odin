@@ -44,13 +44,25 @@ chunk_cell_to_grid :: proc "contextless" (origin: Grid_Coord, cell_index: int) -
 }
 
 grid_to_vec :: proc "contextless" (grid: Grid_Coord) -> [2]f32 {
-	x := f32(grid.x)
-	y := f32(grid.y)
-	return {x - (y * 0.5), y * HALF_SQRT_3}
+	return cartesian_to_axial({f32(grid.x), f32(-grid.y)})
+}
+
+axial_to_cartesian :: proc "contextless" (pos: [2]f32) -> [2]f32 {
+	return {pos.x + (pos.y * 0.5 / HALF_SQRT_3), -pos.y * (1 / HALF_SQRT_3)}
 }
 
 cartesian_to_axial :: proc "contextless" (pos: [2]f32) -> [2]f32 {
-	return {pos.x + (pos.y * 0.5 / HALF_SQRT_3), -pos.y * (1 / HALF_SQRT_3)}
+	return {pos.x - (pos.y * 0.5), -pos.y * HALF_SQRT_3}
+}
+
+// Euclidean squared distance in axial coords
+axial_dist2 :: proc "contextless" (d: [2]f32) -> f32 {
+    return d.x * d.x + d.y * d.y - d.x * d.y
+}
+
+// Euclidean dot product in axial coords  (u^T G v)
+axial_dot :: proc "contextless" (u, v: [2]f32) -> f32 {
+    return u.x*v.x + u.y*v.y - (u.x*v.y + u.y*v.x) * 0.5
 }
 
 hex_perimeter :: proc "contextless" (#any_int radius: int) -> int {
@@ -81,41 +93,45 @@ xxh_2d :: proc "contextless" (seed: u32, x, y: i32) -> f32 {
 	return f32(hash) / (1 << 32)
 }
 
+gradient :: proc "contextless" (seed: u32, p: [2]i32) -> [2]f32 {
+	theta := xxh_2d(seed, p.x, p.y)
+	return {math.cos(theta), math.sin(theta)}
+}
+
 simplex_2d :: proc "contextless" (sample: [2]f32, repeat: [2]i32, seed: u32) -> f32 {
 	ix, fx := math.modf(sample.x)
 	iy, fy := math.modf(sample.y)
 	f := [2]f32{fx, fy}
 	p0 := [2]i32{i32(ix), i32(iy)}
-	// wrap sample coordinates
+	// wrap sample coordinates for getting gradient at lattice points
 	p0 = p0 % repeat
 	p1 := (p0 + 1) % repeat
 	
-	simplex: f32 = 0 if f.x > f.y else 1
+	lower := f.x > f.y
 	
-	// cubic interpolation to smooth out first and second derivatives
-	f = f*f*(3.0-2.0*f)
-  //du := 6.0*f*(1.0-f)
+	// displacement of sample from corners
+	d0 := f
+	d1 := f - {1, 1}
+	d2 := f - ({1, 0} if lower else {0, 1})
+	
+	// kernels - deterministic random gradient at closest simplex corners
+	g0 := gradient(seed, p0)
+	g1 := gradient(seed, p1)
+	g2 := gradient(seed, {p0.x, p1.y} if lower else {p1.x, p0.y})
 
-	//simplex: f32 = 0 if fraction.x + fraction.y < 1 else 1
-
-	// kernels - deterministic random values at closest simplex corners
-	k1 := xxh_2d(seed, p0.x, p0.y)
-	k2 := xxh_2d(seed, p1.x, p1.y)
-	k3 := xxh_2d(seed, p1.x, p0.y) if simplex == 0 else xxh_2d(seed, p0.x, p1.y)
-
-	// distance of sample from each corner, using cube coordinate distance
-	d1 := (abs(f.x - 0) + abs(f.x - f.y - 0 + 0) + abs(-f.y + 0)) / 2.0
-	d2 := (abs(f.x - 1) + abs(f.x - f.y - 1 + 1) + abs(-f.y + 1)) / 2.0
-	d3 :=
-		(abs(f.x - (1 - simplex)) +
-		 abs(f.x - f.y - (1 - simplex) + simplex) +
-		 abs(-f.y + simplex)) / 2.0
-
-	c1 := k1 * (1 - d1)
-	c2 := k2 * (1 - d2)
-	c3 := k3 * (1 - d3)
-
-	return c1 + c2 + c3
+	contribution :: #force_inline proc "contextless" (displacement, gradient: [2]f32) -> f32 {
+		R2 :: 0.5
+		t := R2 - axial_dist2(displacement)
+		if t <= 0 do return 0
+		t = t * t * t * t
+		return t * axial_dot(gradient, displacement)
+	}
+	c0 := contribution(d0, g0)
+	c1 := contribution(d1, g1)
+	c2 := contribution(d2, g2)
+	n := c0 + c1 + c2
+	
+	return n * 70
 }
 
 fill_grid_simplex :: proc "contextless" (
