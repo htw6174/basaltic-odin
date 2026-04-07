@@ -5,8 +5,8 @@ import "core:math"
 
 CHUNK_SIZE :: 32
 
-//sqrt(3/4)
-Y_FACTOR :: 0.8660254040
+//sqrt(3)/2
+HALF_SQRT_3 :: 0.8660254040
 
 Grid_Coord :: distinct [2]i32
 Cube_Coord :: distinct [3]i32
@@ -29,7 +29,7 @@ cube_directions :: [Hex_Direction]Cube_Coord {
 	.NORTH_WEST = {-1, 1, 0},
 }
 
-hex_directions :: [Hex_Direction]Grid_Coord {
+axial_directions :: [Hex_Direction]Grid_Coord {
 	.NORTH_EAST = {0, 1},
 	.EAST       = {1, 0},
 	.SOUTH_EAST = {1, -1},
@@ -45,11 +45,19 @@ chunk_cell_to_grid :: proc "contextless" (origin: Grid_Coord, cell_index: int) -
 grid_to_vec :: proc "contextless" (grid: Grid_Coord) -> [2]f32 {
 	x := f32(grid.x)
 	y := f32(grid.y)
-	return {x - (y * 0.5), y * Y_FACTOR}
+	return {x - (y * 0.5), y * HALF_SQRT_3}
 }
 
 cartesian_to_axial :: proc "contextless" (pos: [2]f32) -> [2]f32 {
-	return {pos.x + (pos.y * 0.5 / Y_FACTOR), -pos.y * (1 / Y_FACTOR)}
+	return {pos.x + (pos.y * 0.5 / HALF_SQRT_3), -pos.y * (1 / HALF_SQRT_3)}
+}
+
+hex_perimeter :: proc "contextless" (#any_int radius: int) -> int {
+	return max(6 * (radius - 1), 1)
+}
+
+hex_area :: proc "contextless" (#any_int radius: int) -> int {
+	return (3 * (radius * radius)) - (3 * radius) + 1
 }
 
 xxh_2d :: proc "contextless" (seed: u32, x, y: i32) -> f32 {

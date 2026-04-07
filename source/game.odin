@@ -175,7 +175,8 @@ init :: proc() {
 	})
 	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({})
 	
-	g.terrain_bindings = make_terrain_mesh(sim.CHUNK_SIZE)
+	//terrain_vertex_buffer, terrain_index_buffer := make_hex_grid_mesh(sim.CHUNK_SIZE)
+	terrain_vertex_buffer, terrain_index_buffer := make_hex_tri_mesh(sim.CHUNK_SIZE, f32(sim.CHUNK_SIZE) / 2)
 	Instance_Data :: struct {
 		pos: [2]f32,
 		cell: [2]f32,
@@ -186,15 +187,25 @@ init :: proc() {
 		inst.pos = sim.grid_to_vec(cell)
 		inst.cell = ([2]f32{f32(cell.x), f32(-cell.y)})
 	}
-	g.terrain_bindings.vertex_buffers[0] = sg.make_buffer({
-		data = {ptr = raw_data(&instance_buffer), size = size_of(instance_buffer)}
-	})
-	g.terrain_bindings.views[shader.VIEW_terrain_heightmap] = sg.make_view({
-		texture = {
-			image = g.erosion_image
-		}
-	})
-	g.terrain_bindings.samplers[shader.SMP_terrain_smp] = sg.make_sampler({min_filter = .LINEAR, mag_filter = .LINEAR})
+	g.terrain_bindings = {
+		vertex_buffers = {
+			0 = sg.make_buffer({
+				data = {ptr = raw_data(&instance_buffer), size = size_of(instance_buffer)}
+			}),
+			1 = terrain_vertex_buffer,
+		},
+		index_buffer = terrain_index_buffer,
+		views = {
+			shader.VIEW_terrain_heightmap = sg.make_view({
+				texture = {
+					image = g.erosion_image
+				}
+			})
+		},
+		samplers = {
+			shader.SMP_terrain_smp = sg.make_sampler({min_filter = .LINEAR, mag_filter = .LINEAR})
+		},
+	}
 	
 	make_pipelines()
 
@@ -465,7 +476,7 @@ draw :: proc(sim_state_interp: f32) {
 		sg.apply_pipeline(g.terrain_pipeline)
 		sg.apply_bindings(g.terrain_bindings)
 		sg.apply_uniforms(shader.UB_terrain_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
-		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 16)
+		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 1)
 		
 		// test cube
 		sg.apply_pipeline(g.cube_pipeline)
@@ -548,6 +559,7 @@ camera_update :: proc(cam: ^Camera) {
 	cam._vp = projection * view
 }
 
+// probably don't need this as it was used in the original c source, might be useful later
 barycentric :: proc(a, b, c: [2]f32) -> [3]f32 {
 	d00 := linalg.dot(b, b)
 	d01 := linalg.dot(b, c)
@@ -559,148 +571,6 @@ barycentric :: proc(a, b, c: [2]f32) -> [3]f32 {
 	w := (d00 * d21 - d01 * d20) / denom
 	u := 1 - v - w
 	return {u, v, w}
-}
-
-make_terrain_mesh :: proc(width: int) -> (bindings: sg.Bindings) {
-	// TODO: remove vertex color when proper shader is implemented
-	hex_count := width * width
-	mesh_width := width + 2
-	mesh_height := width + 1
-	mesh_hex_count := mesh_width * mesh_height
-	verts_per_hex := 3 * 4
-	vertex_count := mesh_hex_count * verts_per_hex
-	tris_per_hex := 6 * 4
-	triangle_count := tris_per_hex * hex_count
-	elements_per_hex := tris_per_hex * 3
-	element_count := elements_per_hex * hex_count
-	outer_radius: f32 = 0.57735026919 // = sqrt(0.75) * (2.0 / 3.0)
-	inner_radius: f32 = 0.5
-	half_edge := outer_radius / 2
-	vert_positions := [7][2]f32 {
-		{0, 0},
-		// from top middle proceed clockwise
-		{0, outer_radius},
-		{inner_radius, half_edge},
-		{inner_radius, -half_edge},
-		{0, -outer_radius},
-		{-inner_radius, -half_edge},
-		{-inner_radius, half_edge},
-	}
-
-	Vertex_Data :: struct {
-		cartesian: [2]f32,
-		axial: [2]f32,
-	}
-	verts := make([]Vertex_Data, vertex_count, context.temp_allocator)
-	elements := make([]u16, element_count, context.temp_allocator)
-
-	v_index := 0
-	add_vert :: #force_inline proc(position: [2]f32, verts: []Vertex_Data, index: ^int) {
-		vd := &verts[index^]
-		vd.cartesian = position
-		vd.axial = sim.cartesian_to_axial(position)
-		index^ += 1
-	}
-
-	// vertices
-	for y in -1 ..< mesh_height - 1 {
-		for x in -1 ..< mesh_width - 1 {
-			hex_position := sim.grid_to_vec({i32(x), i32(y)})
-			// first tri in hex
-			for v in 0 ..< 3 {
-				add_vert(hex_position + vert_positions[v], verts, &v_index)
-			}
-			// vert in center of each hex spoke
-			for v in 0 ..< 6 {
-				p1 := vert_positions[0]
-				p2 := vert_positions[v + 1]
-				pos := (p1 + p2) / 2
-				add_vert(hex_position + pos, verts, &v_index)
-			}
-			// outside corner verts owned by this cell
-			edge_indicies := [4]u16{6, 1, 2, 3}
-			for v in 0 ..< 3 {
-				p1 := vert_positions[edge_indicies[v]]
-				p2 := vert_positions[edge_indicies[v + 1]]
-				pos := (p1 + p2) / 2
-				add_vert(hex_position + pos, verts, &v_index)
-			}
-		}
-	}
-
-	// indicies
-	e_index := 0
-	for y in 0 ..< width {
-		for x in 0 ..< width {
-			// compensate for expanded dimensions of vertex grid
-			vc := (x + 1) + ((y + 1) * mesh_width)
-			cell_base_element_index := vc * verts_per_hex
-			// relative vertex indicies (cell base in compass direction)
-			cbW := -verts_per_hex
-			cbSE := -(verts_per_hex * mesh_width)
-			cbSW := cbSE - verts_per_hex
-			basis_indicies := [?]int {
-				0,
-				1,
-				2,
-				3,
-				10,
-				4,
-				0,
-				2,
-				cbSE + 1,
-				4,
-				11,
-				5,
-				0,
-				cbSE + 1,
-				cbSW + 2,
-				5,
-				cbSE + 9,
-				6,
-				0,
-				cbSW + 2,
-				cbSW + 1,
-				6,
-				cbSW + 10,
-				7,
-				0,
-				cbSW + 1,
-				cbW + 2,
-				7,
-				cbW + 11,
-				8,
-				0,
-				cbW + 2,
-				1,
-				8,
-				9,
-				3,
-			}
-			// hextant : quadrant, but 6 of them (slice is overloaded term)
-			hextant_relative_indicies := [?]int{0, 3, 5, 1, 4, 3, 4, 2, 5, 3, 4, 5}
-			for h in 0 ..< 6 {
-				for e in 0 ..< 12 {
-					ele :=
-						cell_base_element_index +
-						basis_indicies[hextant_relative_indicies[e] + (6 * h)]
-					elements[e_index] = u16(ele)
-					e_index += 1
-				}
-			}
-		}
-	}
-
-	v_size := slice.size(verts)
-	e_size := slice.size(elements)
-
-	bindings.vertex_buffers[1] = sg.make_buffer(
-		{data = {ptr = raw_data(verts), size = uint(v_size)}},
-	)
-	bindings.index_buffer = sg.make_buffer(
-		{usage = {index_buffer = true}, data = {ptr = raw_data(elements), size = uint(e_size)}},
-	)
-	return bindings
 }
 
 // world_ui_camera :: proc() -> rl.Camera2D {
