@@ -57,7 +57,7 @@ init :: proc(s: ^State) {
 			c.origin,
 			{CHUNK_SIZE, CHUNK_SIZE},
 			s.seed,
-			3,
+			4,
 			CHUNK_SIZE * 4,
 			3,
 		)

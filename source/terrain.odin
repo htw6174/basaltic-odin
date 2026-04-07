@@ -12,11 +12,12 @@ Vertex_Data :: struct {
 }
 
 // Returns a "pointy top" hexagon of regular triangles with the center at [0, 0] and the right side at x=inner_radius
+// For u16 indicies, the maximum segments_per_side is 60
 make_hex_tri_mesh :: proc(segments_per_side: int, inner_radius: f32) -> (vertex_buffer, index_buffer: sg.Buffer) {
 	assert(segments_per_side > 0)
 	radius := segments_per_side + 1
 	outer_radius := inner_radius * sim.HALF_SQRT_3 * 4 / 3
-	edge_length := inner_radius / f32(segments_per_side)
+	edge_length := outer_radius / f32(segments_per_side)
 	vertex_count := sim.hex_area(radius)
 	triangle_count := segments_per_side * segments_per_side * 6
 	element_count := triangle_count * 3
@@ -39,9 +40,20 @@ make_hex_tri_mesh :: proc(segments_per_side: int, inner_radius: f32) -> (vertex_
 			side := v / layer_side_verts
 			vert := layer_base_vert + v
 			verts_from_corner := v - (layer_side_verts * side)
+			
+			// Corner angles for a pointy-top hex: 0/6*TAU, 1/6*TAU, ...
+			corner_angle_a := f32(side) / 6.0 * math.TAU
+			corner_angle_b := f32(side + 1) / 6.0 * math.TAU
+			
+			corner_a := [2]f32{math.sin(corner_angle_a), math.cos(corner_angle_a)} * f32(layer - 1) * edge_length
+			corner_b := [2]f32{math.sin(corner_angle_b), math.cos(corner_angle_b)} * f32(layer - 1) * edge_length
+			
+			t := f32(verts_from_corner) / f32(layer_side_verts)
+			pos := linalg.lerp(corner_a, corner_b, t)
+
 			// TEST: just put the verts on a circle
-			theta := (f32(v) / f32(layer_verts)) * math.TAU
-			pos := [2]f32{math.sin(theta), math.cos(theta)} * f32(layer) * edge_length
+			// theta := (f32(v) / f32(layer_verts)) * math.TAU
+			// pos := [2]f32{math.sin(theta), math.cos(theta)} * f32(layer) * edge_length
 			verts[vert] = {
 				cartesian = pos,
 				axial = sim.cartesian_to_axial(pos),
@@ -51,18 +63,18 @@ make_hex_tri_mesh :: proc(segments_per_side: int, inner_radius: f32) -> (vertex_
 				// this is a corner
 				// make one triangle with current vert, next, and same corner from previous layer
 				elements[element    ] = u16(vert)
-				elements[element + 1] = u16(vert + 1)
+				elements[element + 1] = u16(layer_base_vert + (v + 1) % layer_verts)
 				elements[element + 2] = u16(prev_layer_base_vert + (prev_layer_side_verts * side))
 				element += 3
 			} else {
 				// this is on an edge
 				// make two triangles with verts at corresponding offset from corner in previous layer
 				elements[element    ] = u16(vert)
-				elements[element + 1] = u16(prev_layer_base_vert + (prev_layer_side_verts * side) + verts_from_corner)
+				elements[element + 1] = u16(prev_layer_base_vert + ((prev_layer_side_verts * side) + verts_from_corner) % prev_layer_verts)
 				elements[element + 2] = u16(prev_layer_base_vert + (prev_layer_side_verts * side) + verts_from_corner - 1)
 				elements[element + 3] = u16(vert)
-				elements[element + 4] = u16(vert + 1)
-				elements[element + 5] = u16(prev_layer_base_vert + (prev_layer_side_verts * side) + verts_from_corner)
+				elements[element + 4] = u16(layer_base_vert + (v + 1) % layer_verts)
+				elements[element + 5] = u16(prev_layer_base_vert + ((prev_layer_side_verts * side) + verts_from_corner) % prev_layer_verts)
 				element += 6
 			}
 		}

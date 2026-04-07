@@ -158,8 +158,8 @@ init :: proc() {
 	
 	g.erosion_image = sg.make_image({
 		// (total map size) * (compute work group size)
-		width = sim.WORLD_SIZE * 8,
-		height = sim.WORLD_SIZE * 8,
+		width = sim.WORLD_SIZE * 16,
+		height = sim.WORLD_SIZE * 16,
 		pixel_format = .RGBA32F,
 		usage = {
 			storage_image = true,
@@ -175,17 +175,18 @@ init :: proc() {
 	})
 	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({})
 	
+	COMPRESS :: 2
 	//terrain_vertex_buffer, terrain_index_buffer := make_hex_grid_mesh(sim.CHUNK_SIZE)
-	terrain_vertex_buffer, terrain_index_buffer := make_hex_tri_mesh(sim.CHUNK_SIZE, f32(sim.CHUNK_SIZE) / 2)
+	terrain_vertex_buffer, terrain_index_buffer := make_hex_tri_mesh(60, f32(sim.CHUNK_SIZE) / (2 * COMPRESS))
 	Instance_Data :: struct {
-		pos: [2]f32,
-		cell: [2]f32,
+		cartesian: [2]f32,
+		axial: [2]f32,
 	}
 	instance_buffer: [16]Instance_Data
 	for &inst, i in instance_buffer {
-		cell := sim.Grid_Coord{i32(i % 4) * sim.CHUNK_SIZE, i32(i / 4) * sim.CHUNK_SIZE}
-		inst.pos = sim.grid_to_vec(cell)
-		inst.cell = ([2]f32{f32(cell.x), f32(-cell.y)})
+		cell := sim.Grid_Coord{i32(i % 4) * sim.CHUNK_SIZE / COMPRESS, i32(i / 4) * sim.CHUNK_SIZE / COMPRESS}
+		inst.cartesian = sim.grid_to_vec(cell)
+		inst.axial = {f32(cell.x), f32(-cell.y)}
 	}
 	g.terrain_bindings = {
 		vertex_buffers = {
@@ -476,7 +477,7 @@ draw :: proc(sim_state_interp: f32) {
 		sg.apply_pipeline(g.terrain_pipeline)
 		sg.apply_bindings(g.terrain_bindings)
 		sg.apply_uniforms(shader.UB_terrain_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
-		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 1)
+		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 16)
 		
 		// test cube
 		sg.apply_pipeline(g.cube_pipeline)

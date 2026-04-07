@@ -13,7 +13,7 @@ layout(binding=0) uniform sampler ismp;
 
 layout(binding=1,rgba32f) uniform writeonly image2D erosion_map;
 
-layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+layout(local_size_x=16, local_size_y=16, local_size_z=1) in;
 
 #define HEIGHT_AMP 1.0
 
@@ -373,10 +373,9 @@ void main() {
   } else {
     gradient = vec2(samples.y - samples.x, (samples.y + samples.x) / 2. - samples.w);
   }
-  if (gradient == vec2(0., 0.)) gradient = vec2(-1., -1.);
   //vec4 phacelle = PhacelleNoise(gridToCartesian(cell_grid) * 0.75, safe_normalize(gradient), 1.0, 0.25, 0.5);
   // height must be in 0..1 range
-  vec3 height_and_slope = vec3(height * 0.5 + 0.5, safe_normalize(gradient));
+  vec3 height_and_slope = vec3(height * 0.5 + 0.5, gradient * 20.);
   
   // Define the erosion fade target based on the altitude of the pre-eroded terrain.
   // The fade target should strive to be -1 at valleys and 1 at peaks, but overshooting is ok.
@@ -394,6 +393,7 @@ void main() {
   
   // TODO: should use empty channels for normals calculated with all 7 closest samples
   imageStore(erosion_map, out_texel, vec4(height + erode.x, erode.yz * 0.5 + 0.5, ridgeMap));
+  //imageStore(erosion_map, out_texel, vec4(height_and_slope.x, gradient * 0.5 + 0.5, 0.));
 }
 @end
 
@@ -466,7 +466,8 @@ void main() {
     vec3 bitangent = vec3(uv2 * uv_to_world, (h2 - height) * vertical_scale);
     normal = normalize(cross(tangent, bitangent));
     
-    color = vec4(vec3(erosion_samp.w) * 0.5 + 0.5, 1.);
+    //color = vec4(vec3(erosion_samp.w) * 0.5 + 0.5, 1.);
+    color = vec4(vec3(erosion_samp.xyz), erosion_samp.w * 0.5 + 0.5);
 }
 @end
 
@@ -517,7 +518,7 @@ float phong(vec3 normal, vec3 lightDir) {
 
 void main() {
   vec3 albedo;
-  albedo = color.xyz;
+  albedo = color.www;
   //albedo = ihash3(gl_PrimitiveID);
   int cell_idx = int(round(cell_axial.x)) + (int(round(-cell_axial.y)) * map_size.x);
   //albedo = ihash3(cell_idx);

@@ -2,6 +2,7 @@ package sim
 
 import "core:hash/xxhash"
 import "core:math"
+import "core:math/linalg"
 
 CHUNK_SIZE :: 32
 
@@ -80,32 +81,35 @@ xxh_2d :: proc "contextless" (seed: u32, x, y: i32) -> f32 {
 	return f32(hash) / (1 << 32)
 }
 
-simplex_2d :: proc "contextless" (x, y: f32, repeat_x, repeat_y: i32, seed: u32) -> f32 {
-	integral_x, fraction_x := math.modf(x)
-	integral_y, fraction_y := math.modf(y)
-	ix := i32(integral_x)
-	iy := i32(integral_y)
+simplex_2d :: proc "contextless" (sample: [2]f32, repeat: [2]i32, seed: u32) -> f32 {
+	ix, fx := math.modf(sample.x)
+	iy, fy := math.modf(sample.y)
+	f := [2]f32{fx, fy}
+	p0 := [2]i32{i32(ix), i32(iy)}
 	// wrap sample coordinates
-	x0 := ix % repeat_x
-	x1 := (ix + 1) % repeat_x
-	y0 := iy % repeat_y
-	y1 := (iy + 1) % repeat_y
+	p0 = p0 % repeat
+	p1 := (p0 + 1) % repeat
+	
+	simplex: f32 = 0 if f.x > f.y else 1
+	
+	// cubic interpolation to smooth out first and second derivatives
+	f = f*f*(3.0-2.0*f)
+  //du := 6.0*f*(1.0-f)
 
-	simplex: f32 = 0 if fraction_x > fraction_y else 1
-	//simplex: f32 = 0 if fraction_x + fraction_y < 1 else 1
+	//simplex: f32 = 0 if fraction.x + fraction.y < 1 else 1
 
 	// kernels - deterministic random values at closest simplex corners
-	k1 := xxh_2d(seed, x0, y0)
-	k2 := xxh_2d(seed, x1, y1)
-	k3 := xxh_2d(seed, x1, y0) if simplex == 0 else xxh_2d(seed, x0, y1)
+	k1 := xxh_2d(seed, p0.x, p0.y)
+	k2 := xxh_2d(seed, p1.x, p1.y)
+	k3 := xxh_2d(seed, p1.x, p0.y) if simplex == 0 else xxh_2d(seed, p0.x, p1.y)
 
 	// distance of sample from each corner, using cube coordinate distance
-	d1 := (abs(fraction_x - 0) + abs(fraction_x - fraction_y - 0 + 0) + abs(-fraction_y + 0)) / 2.0
-	d2 := (abs(fraction_x - 1) + abs(fraction_x - fraction_y - 1 + 1) + abs(-fraction_y + 1)) / 2.0
+	d1 := (abs(f.x - 0) + abs(f.x - f.y - 0 + 0) + abs(-f.y + 0)) / 2.0
+	d2 := (abs(f.x - 1) + abs(f.x - f.y - 1 + 1) + abs(-f.y + 1)) / 2.0
 	d3 :=
-		(abs(fraction_x - (1 - simplex)) +
-		 abs(fraction_x - fraction_y - (1 - simplex) + simplex) +
-		 abs(-fraction_y + simplex)) / 2.0
+		(abs(f.x - (1 - simplex)) +
+		 abs(f.x - f.y - (1 - simplex) + simplex) +
+		 abs(-f.y + simplex)) / 2.0
 
 	c1 := k1 * (1 - d1)
 	c2 := k2 * (1 - d2)
@@ -124,10 +128,8 @@ fill_grid_simplex :: proc "contextless" (
 	scale := f32(samples_per_repeat) / f32(repeat_interval)
 	denominator := (1 << u32(octaves)) - 1
 	for &value, i in values {
-		x := origin.x + (i32(i) % area.x)
-		y := origin.y + (i32(i) / area.y)
-		scaled_x := f32(x) * scale
-		scaled_y := f32(y) * scale
+		sample := origin + {i32(i) % area.x, i32(i) / area.y}
+		scaled_sample := [2]f32{f32(sample.x), f32(sample.y)} * scale
 		domain := samples_per_repeat
 		numerator := 1 << (u32(octaves) - 1)
 		value = 0
@@ -135,9 +137,8 @@ fill_grid_simplex :: proc "contextless" (
 		for iter in 0 ..< octaves {
 			weight := f32(numerator) / f32(denominator)
 			numerator = numerator >> 1
-			value += simplex_2d(scaled_x, scaled_y, domain, domain, seed) * weight
-			scaled_x *= 2
-			scaled_y *= 2
+			value += simplex_2d(scaled_sample, {domain, domain}, seed) * weight
+			scaled_sample *= 2
 			domain *= 2
 		}
 	}
