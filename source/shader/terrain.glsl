@@ -324,8 +324,8 @@ ivec2 texelWrap(ivec2 coord, ivec2 range) {
 
 //sqrt(3/4)
 #define Y_FACTOR 0.8660254040
-vec2 gridToCartesian(vec2 grid) {
-  return vec2(grid.x - (grid.y * 0.5), grid.y * Y_FACTOR);
+vec2 axialToCartesian(vec2 grid) {
+  return vec2(grid.x + (grid.y * 0.5), -grid.y * Y_FACTOR);
 }
 
 void main() {
@@ -344,9 +344,8 @@ void main() {
   // result is constant across whole workgroup; TODO research if this is automatically optimized in any way
   // NOTE: sampling integer textures isn't supported in the HLSL version sokol uses, must change types or texelfetch 4 samples manually
   //vec4 samples = vec4(textureGather(isampler2D(base_map, ismp), in_texel / textureSize(isampler2D(base_map, ismp), 0), 0)) / 128.0;
-  vec2 cell_grid = vec2(out_texel) * vec2(map_size) / imageSize(erosion_map);
-  vec2 cell_axial = cell_grid * vec2(1., -1.);
-  vec2 base_cell_axial = vec2(in_texel.x, -in_texel.y);
+  vec2 cell_axial = vec2(out_texel) * vec2(map_size) / imageSize(erosion_map);
+  vec2 base_cell_axial = vec2(in_texel.x, in_texel.y + 1);
   vec2 local_axial = cell_axial - base_cell_axial;
  	// cubic interpolation to smooth out first and second derivatives
 	// vec2 f = local_axial * vec2(1., -1.);
@@ -365,10 +364,10 @@ void main() {
   }
   // vec3 f = barycentric;
   // barycentric = f*f*(3.0-2.0*f);
-  // use .z or .x depending on simplex
-  float height = (barycentric.x * samples.w) + 
-                 (barycentric.y * samples.y) +
-                 (barycentric.z * ((1. - cell_simplex) * samples.z + (cell_simplex * samples.x)));
+  // use .y or .w depending on simplex
+  float height = (barycentric.x * samples.x) + 
+                 (barycentric.y * samples.z) +
+                 (barycentric.z * ((1. - cell_simplex) * samples.y + (cell_simplex * samples.w)));
   
   // Setup for ErosionFilter params
   // For slope of surface at a point, can use delta of 2 horizontal points in simplex and delta of their midpoint from 3rd point, sign flipped based on simplex
@@ -380,7 +379,7 @@ void main() {
   } else {
     gradient = vec2(samples.y - samples.x, (samples.y + samples.x) / 2. - samples.w);
   }
-  //vec4 phacelle = PhacelleNoise(gridToCartesian(cell_grid) * 0.75, safe_normalize(gradient), 1.0, 0.25, 0.5);
+  //vec4 phacelle = PhacelleNoise(axialToCartesian(cell_grid) * 0.75, safe_normalize(gradient), 1.0, 0.25, 0.5);
   // height must be in 0..1 range
   vec3 height_and_slope = vec3(height * 0.5 + 0.5, gradient * 20.);
   
@@ -390,7 +389,7 @@ void main() {
   
   float ridgeMap, debug;
   vec4 erode = ErosionFilter(
-    gridToCartesian(cell_grid) / map_size, height_and_slope, fadeTarget, 
+    axialToCartesian(cell_axial) / map_size, height_and_slope, fadeTarget, 
     EROSION_STRENGTH, EROSION_GULLY_WEIGHT, EROSION_DETAIL,
     EROSION_ROUNDING, EROSION_ONSET, EROSION_ASSUMED_SLOPE,
     EROSION_SCALE, EROSION_OCTAVES, EROSION_LACUNARITY,
@@ -426,14 +425,11 @@ flat out vec2 cell_axial;
 
 void main() {
     cell_axial = instance_axial + vertex_axial; // for use with cube coordinate math, q & r components
-    vec2 cell_grid = cell_axial * vec2(1, -1); // for sampling textures which don't wrap
-    //vec3 cube_coord = vec3(qr, -qr.x - qr.y);
+    //vec2 cell_grid = cell_axial * vec2(1, -1); // for sampling textures which don't wrap
     vec2 map_uv = cell_axial / vec2(map_size); // for sampling data that span the whole map
     // use cube coords to determine which texels need to be sampled and interpolate between them
     // base cell is closest cell to the bottom-left of this vertex
     vec2 base_cell_axial = vec2(floor(cell_axial.x), ceil(cell_axial.y));
-    vec2 base_cell_grid = vec2(base_cell_axial.x, -base_cell_axial.y);
-    vec2 base_cell_uv = base_cell_grid / vec2(map_size);
     //vec4 samples = textureGather(sampler2D(heightmap, smp), map_uv, 0);
     vec4 erosion_samp = texture(sampler2D(heightmap, smp), map_uv);
     float height = erosion_samp.x;
@@ -462,7 +458,7 @@ void main() {
     vec2 samp_offset_y = vec2(cos(radians(60.)), sin(radians(60.))) * samp_delta;
     vec2 samp_offset_z = vec2(1., 0.) * samp_delta;
     vec2 uv1 = vec2(samp_delta.x, 0.);
-    vec2 uv2 = vec2(0., samp_delta.y);
+    vec2 uv2 = vec2(0., -samp_delta.y);
     float h1 = texture(sampler2D(heightmap, smp), map_uv + uv1).x;
     float h2 = texture(sampler2D(heightmap, smp), map_uv + uv2).x;
     
