@@ -76,7 +76,7 @@ init :: proc() {
 		textures = make([dynamic]sg.Image, 0),
 		world_camera = {
 			// geez I wish Odin supported creating small arrays with a mix of others e.g. c: [3]f32 = {a.xy, b.x}
-			position = {sim.grid_to_vec({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).x, sim.grid_to_vec({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).y, 0}, 
+			position = {sim.grid_to_cartesian({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).x, sim.grid_to_cartesian({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).y, 0}, 
 			orbit = {math.PI / 4, -math.PI / 6, 0}, 
 			distance = 50, 
 			fovy = 60,
@@ -191,8 +191,8 @@ init :: proc() {
 	instance_buffer: [16]Instance_Data
 	for &inst, i in instance_buffer {
 		cell := sim.Grid_Coord{i32(i % 4) * sim.CHUNK_SIZE / COMPRESS, i32(i / 4) * sim.CHUNK_SIZE / COMPRESS}
-		inst.cartesian = sim.grid_to_vec(cell)
-		inst.axial = {f32(cell.x), f32(-cell.y)}
+		inst.cartesian = sim.grid_to_cartesian(cell)
+		inst.axial = {f32(cell.x), f32(cell.y)}
 	}
 	g.terrain_bindings = {
 		vertex_buffers = {
@@ -518,11 +518,9 @@ update_heightmap :: proc() {
 	// TODO: persist this buffer
 	image_buffer := make([]i8, buffer_size, context.temp_allocator)
 	for chunk, chunk_idx in plane.chunks {
-		// TODO: replace hardcoded chunk counts
-		chunk_coord := sim.Grid_Coord{i32(chunk_idx % 4) * sim.CHUNK_SIZE, i32(chunk_idx / 4) * sim.CHUNK_SIZE}
 		for cell, cell_idx in chunk.data {
-			cell_coord := sim.chunk_cell_to_grid(chunk_coord, cell_idx)
-			texel := int(cell_coord.x + (cell_coord.y * sim.WORLD_SIZE))
+			cell_coord := sim.chunk_cell_to_grid(chunk.origin, cell_idx)
+			texel := sim.grid_to_index(cell_coord, {sim.WORLD_SIZE, sim.WORLD_SIZE})
 			buffer_idx := texel * int(format_info.bytes_per_pixel)
 			image_buffer[buffer_idx] = cell.height
 			// TODO: other attributes in this data texture

@@ -428,7 +428,7 @@ void main() {
     cell_axial = instance_axial + vertex_axial; // for use with cube coordinate math, q & r components
     vec2 cell_grid = cell_axial * vec2(1, -1); // for sampling textures which don't wrap
     //vec3 cube_coord = vec3(qr, -qr.x - qr.y);
-    vec2 map_uv = cell_grid / vec2(map_size); // for sampling data that span the whole map
+    vec2 map_uv = cell_axial / vec2(map_size); // for sampling data that span the whole map
     // use cube coords to determine which texels need to be sampled and interpolate between them
     // base cell is closest cell to the bottom-left of this vertex
     vec2 base_cell_axial = vec2(floor(cell_axial.x), ceil(cell_axial.y));

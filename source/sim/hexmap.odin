@@ -9,8 +9,9 @@ CHUNK_SIZE :: 32
 //sqrt(3)/2
 HALF_SQRT_3 :: 0.8660254040
 
-Grid_Coord :: distinct [2]i32
-Cube_Coord :: distinct [3]i32
+Grid_Coord  :: distinct [2]i32 // to identify discrete cells
+Cube_Coord  :: distinct [3]i32 // not often needed but useful for some calculations
+Axial_Coord :: distinct [2]f32 // first 2 components of a cube coordinate, can lie between cells
 
 Hex_Direction :: enum {
 	NORTH_EAST,
@@ -43,8 +44,15 @@ chunk_cell_to_grid :: proc "contextless" (origin: Grid_Coord, cell_index: int) -
 	return origin + {i32(cell_index) % CHUNK_SIZE, i32(cell_index) / CHUNK_SIZE}
 }
 
-grid_to_vec :: proc "contextless" (grid: Grid_Coord) -> [2]f32 {
-	return axial_to_cartesian({f32(grid.x), -f32(grid.y)})
+grid_to_index :: proc "contextless" (grid: Grid_Coord, array_size: [2]int) -> int {
+	// TODO: wrap coord to within 2d array bounds
+	wrapped_x := math.floor_mod(int(grid.x), array_size.x)
+	wrapped_y := math.floor_mod(int(grid.y), array_size.y)
+	return wrapped_x + wrapped_y * array_size.x
+}
+
+grid_to_cartesian :: proc "contextless" (grid: Grid_Coord) -> [2]f32 {
+	return axial_to_cartesian({f32(grid.x), f32(grid.y)})
 }
 
 axial_to_cartesian :: proc "contextless" (axial: [2]f32) -> [2]f32 {
@@ -57,12 +65,12 @@ cartesian_to_axial :: proc "contextless" (cartesian: [2]f32) -> [2]f32 {
 
 // Euclidean squared distance in axial coords
 axial_dist2 :: proc "contextless" (d: [2]f32) -> f32 {
-    return d.x * d.x + d.y * d.y - d.x * d.y
+    return d.x * d.x + d.y * d.y + d.x * d.y
 }
 
 // Euclidean dot product in axial coords  (u^T G v)
 axial_dot :: proc "contextless" (u, v: [2]f32) -> f32 {
-    return u.x*v.x + u.y*v.y - (u.x*v.y + u.y*v.x) * 0.5
+    return u.x*v.x + u.y*v.y + (u.x*v.y + u.y*v.x) * 0.5
 }
 
 hex_perimeter :: proc "contextless" (#any_int radius: int) -> int {
@@ -99,20 +107,26 @@ gradient :: proc "contextless" (seed: u32, p: [2]i32) -> [2]f32 {
 }
 
 simplex_2d :: proc "contextless" (sample: [2]f32, repeat: [2]i32, seed: u32) -> f32 {
-	ix, fx := math.modf(sample.x)
-	iy, fy := math.modf(sample.y)
-	f := [2]f32{fx, fy}
-	p0 := [2]i32{i32(ix), i32(iy)}
+	// ix, fx := math.modf(sample.x)
+	// iy, fy := math.modf(sample.y)
+	iq := math.floor(sample.x)
+	ir := math.ceil(sample.y)
+	fq := sample.x - iq
+	fr := sample.y - ir
+	f := [2]f32{fq, fr}
+	p0 := [2]i32{i32(iq), i32(ir)}
 	// wrap sample coordinates for getting gradient at lattice points
+	// TODO: fix repeat on negative points
 	p0 = p0 % repeat
-	p1 := (p0 + 1) % repeat
+	p1 := (p0 + {1, -1}) % repeat
+	if p1.y < 0 do p1.y += repeat.y
 	
-	lower := f.x > f.y
+	lower := -f.x - f.y < 0
 	
 	// displacement of sample from corners
 	d0 := f
-	d1 := f - {1, 1}
-	d2 := f - ({1, 0} if lower else {0, 1})
+	d1 := f - {1, -1}
+	d2 := f - ({1, 0} if lower else {0, -1})
 	
 	// kernels - deterministic random gradient at closest simplex corners
 	g0 := gradient(seed, p0)

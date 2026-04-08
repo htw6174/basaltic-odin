@@ -124,7 +124,7 @@ make_hex_grid_mesh :: proc(width: int) -> (vertex_buffer, index_buffer: sg.Buffe
 	// vertices
 	for y in -1 ..< mesh_height - 1 {
 		for x in -1 ..< mesh_width - 1 {
-			hex_position := sim.grid_to_vec({i32(x), i32(y)})
+			hex_position := sim.grid_to_cartesian({i32(x), i32(y)})
 			// first tri in hex
 			for v in 0 ..< 3 {
 				add_vert(hex_position + vert_positions[v], verts, &v_index)
