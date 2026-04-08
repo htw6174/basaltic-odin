@@ -429,8 +429,6 @@ void main() {
     vec2 cell_grid = cell_axial * vec2(1, -1); // for sampling textures which don't wrap
     //vec3 cube_coord = vec3(qr, -qr.x - qr.y);
     vec2 map_uv = cell_grid / vec2(map_size); // for sampling data that span the whole map
-    // FIXME: this is a quick hack to get the map looking right. Somewhere, the simplex heightmap is getting flipped on one axis. Need to generate a heightmap with an obvious correct direction to determine correct orientation.
-    //map_uv  *= vec2(1, -1);
     // use cube coords to determine which texels need to be sampled and interpolate between them
     // base cell is closest cell to the bottom-left of this vertex
     vec2 base_cell_axial = vec2(floor(cell_axial.x), ceil(cell_axial.y));

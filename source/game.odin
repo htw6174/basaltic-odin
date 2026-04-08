@@ -74,7 +74,13 @@ init :: proc() {
 	g^ = Game_Memory {
 		run = true,
 		textures = make([dynamic]sg.Image, 0),
-		world_camera = {orbit = {math.PI / 4, -math.PI / 6, 0}, distance = 50, fovy = 60},
+		world_camera = {
+			// geez I wish Odin supported creating small arrays with a mix of others e.g. c: [3]f32 = {a.xy, b.x}
+			position = {sim.grid_to_vec({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).x, sim.grid_to_vec({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).y, 0}, 
+			orbit = {math.PI / 4, -math.PI / 6, 0}, 
+			distance = 50, 
+			fovy = 60,
+		},
 		tick_to_real = time.Second / 60,
 		time_last_frame = time.now(),
 		sim_run = false,

@@ -44,15 +44,15 @@ chunk_cell_to_grid :: proc "contextless" (origin: Grid_Coord, cell_index: int) -
 }
 
 grid_to_vec :: proc "contextless" (grid: Grid_Coord) -> [2]f32 {
-	return cartesian_to_axial({f32(grid.x), f32(-grid.y)})
+	return axial_to_cartesian({f32(grid.x), -f32(grid.y)})
 }
 
-axial_to_cartesian :: proc "contextless" (pos: [2]f32) -> [2]f32 {
-	return {pos.x + (pos.y * 0.5 / HALF_SQRT_3), -pos.y * (1 / HALF_SQRT_3)}
+axial_to_cartesian :: proc "contextless" (axial: [2]f32) -> [2]f32 {
+	return {axial.x + (axial.y * 0.5), -axial.y * HALF_SQRT_3}
 }
 
-cartesian_to_axial :: proc "contextless" (pos: [2]f32) -> [2]f32 {
-	return {pos.x - (pos.y * 0.5), -pos.y * HALF_SQRT_3}
+cartesian_to_axial :: proc "contextless" (cartesian: [2]f32) -> [2]f32 {
+	return {cartesian.x + (cartesian.y * 0.5 / HALF_SQRT_3), -cartesian.y * (1 / HALF_SQRT_3)}
 }
 
 // Euclidean squared distance in axial coords
@@ -94,7 +94,7 @@ xxh_2d :: proc "contextless" (seed: u32, x, y: i32) -> f32 {
 }
 
 gradient :: proc "contextless" (seed: u32, p: [2]i32) -> [2]f32 {
-	theta := xxh_2d(seed, p.x, p.y)
+	theta := xxh_2d(seed, p.x, p.y) * math.TAU
 	return {math.cos(theta), math.sin(theta)}
 }
 
@@ -117,7 +117,7 @@ simplex_2d :: proc "contextless" (sample: [2]f32, repeat: [2]i32, seed: u32) -> 
 	// kernels - deterministic random gradient at closest simplex corners
 	g0 := gradient(seed, p0)
 	g1 := gradient(seed, p1)
-	g2 := gradient(seed, {p0.x, p1.y} if lower else {p1.x, p0.y})
+	g2 := gradient(seed, {p1.x, p0.y} if lower else {p0.x, p1.y})
 
 	contribution :: #force_inline proc "contextless" (displacement, gradient: [2]f32) -> f32 {
 		R2 :: 0.5
