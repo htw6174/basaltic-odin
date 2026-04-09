@@ -7,6 +7,10 @@
 
 @block common
 #define TAU 6.28318530717959
+
+// TODO: set with uniform
+const ivec2 map_size = ivec2(32);
+const float vertical_scale = 2.;
 @end
 
 @cs cs_erosion
@@ -331,6 +335,13 @@ vec2 axialToCartesian(vec2 axial) {
   return vec2(axial.x + (axial.y * 0.5), -axial.y * Y_FACTOR);
 }
 
+// Axial gradient → Cartesian gradient
+vec2 axialGradToCartesian(vec2 g) {
+    // ∂h/∂x = ∂h/∂q,  ∂h/∂y = (∂h/∂q - 2·∂h/∂r) / sqrt(3)
+    return vec2(g.x, (g.x - 2.0 * g.y) * (1.0 / sqrt(3.0)));
+}
+
+
 float axialDist2(vec2 d) {
   return d.x*d.x + d.y*d.y + d.x*d.y;
 }
@@ -340,14 +351,19 @@ vec2 gradDist2(vec2 d) {
   return vec2(2.0*d.x + d.y, d.x + 2.0*d.y);
 }
 
-const float R2 = Y_FACTOR;
+// TODO: Claude claims this can't be greater than 0.75 without introducing discontinuities, but it seems to work fine for gradients up to sqrt(1.5)
+// Claude's math checks out, but the "sagging" I get from the erosion filter seems if anything to be worse at lower R2 values, and better at very high R2
+const float R2 = 0.75; //sqrt(1.5);
 
 void main() {
-  ivec2 in_texel = ivec2(gl_WorkGroupID.xy);
+  ivec2 map_size = textureSize(isampler2D(base_map, ismp), 0);
+  ivec2 output_size = imageSize(erosion_map);
+  
+  // work group id from 0-255; map_size = 32; should be 1/8 of work group id; should come from ratio of work group count to map size
+  ivec2 in_texel = ivec2(gl_WorkGroupID.xy) / 8; //(ivec2(gl_NumWorkGroups.xy) / map_size);
   ivec2 out_texel = ivec2(gl_GlobalInvocationID.xy);
   vec2 sample_uv = vec2(gl_LocalInvocationID.xy) / vec2(gl_WorkGroupSize.xy);
   
-  ivec2 map_size = textureSize(isampler2D(base_map, ismp), 0);
   int h0 = texelFetch(isampler2D(base_map, ismp), texelWrap(in_texel              , map_size), 0).x;
   int h1 = texelFetch(isampler2D(base_map, ismp), texelWrap(in_texel + ivec2(1, 0), map_size), 0).x;
   int h2 = texelFetch(isampler2D(base_map, ismp), texelWrap(in_texel + ivec2(1, 1), map_size), 0).x;
@@ -362,7 +378,6 @@ void main() {
   vec2 local_axial = cell_axial - base_cell_axial;
 	vec2 fa = local_axial;
   float s = -fa.x - fa.y;
-  // Determine simplex and convert axial coordinates to barycentric to interpolate samples
   // 0 on -s side, 1 on +s side
   float cell_simplex = ceil(s);
   
@@ -403,7 +418,7 @@ void main() {
   vec2 gradN = gw0*v0 + gw1*v1 + gw2*v2;
   vec2 gradD = gw0 + gw1 + gw2;
   vec2 gradient = (gradN * D - N * gradD) / (D * D);
-  gradient = axialToCartesian(gradient);
+  gradient = axialGradToCartesian(gradient);
   //gradient = gradient * vec2(1, -1);
   
   //vec4 phacelle = PhacelleNoise(axialToCartesian(cell_grid) * 0.75, safe_normalize(gradient), 1.0, 0.25, 0.5);
@@ -434,10 +449,6 @@ void main() {
 @include_block common
 layout(binding=0) uniform texture2D heightmap;
 layout(binding=0) uniform sampler smp;
-
-// TODO: set with uniform
-const ivec2 map_size = ivec2(128);
-const float vertical_scale = 10.;
 
 // per-instance
 in vec2 instance_position;
@@ -476,31 +487,9 @@ void main() {
     //                (barycentric.z * ((1. - cell_simplex) * samples.z + (cell_simplex * samples.x)));
     gl_Position = mvp * vec4(instance_position + position, height * vertical_scale, 1.);
     
-    // normal TODO: precalc in another compute shader pass?
-    //vec2 edge_length = vec2(0.57735026919);
-    vec2 samp_delta = vec2(1.) / textureSize(sampler2D(heightmap, smp), 0);
-    vec2 uv_to_world = vec2(map_size);
-    
-    // vec2 gradient = erosion_samp.yz;
-    // vec2 sideDir = gradient.yx * vec2(-1.0, 1.0) * TAU;
-    
-    // float vertical = length(gradient);
-    // vec3 tangent = vec3(gradient, vertical);
-    // vec3 bitangent = vec3(gradient, vertical);
-    //normal = vertical == 0.0 ? vec3(0, 0, 1) : normalize(cross(tangent, bitangent));
-    
-    // vec2 samp_offset_x = vec2(cos(radians(120.)), sin(radians(120.))) * samp_delta;
-    // vec2 samp_offset_y = vec2(cos(radians(60.)), sin(radians(60.))) * samp_delta;
-    // vec2 samp_offset_z = vec2(1., 0.) * samp_delta;
-    vec2 uv1 = vec2(samp_delta.x, 0.);
-    vec2 uv2 = vec2(0., samp_delta.y);
-    float h1 = texture(sampler2D(heightmap, smp), map_uv + uv1).x;
-    float h2 = texture(sampler2D(heightmap, smp), map_uv + uv2).x;
-    
-    // Must scale components back to world space because the scale factor for xy and z are different
-    vec3 tangent = vec3(uv1 * uv_to_world, (h1 - height) * vertical_scale);
-    vec3 bitangent = vec3(uv2 * uv_to_world, (h2 - height) * vertical_scale);
-    normal = normalize(cross(tangent, bitangent));
+    // normal from gradient
+    vec2 gradient = erosion_samp.yz;
+    normal = normalize(vec3(-gradient * vertical_scale, 1.0));
     
     //color = vec4(vec3(erosion_samp.w) * 0.5 + 0.5, 1.);
     color = vec4(erosion_samp.x, erosion_samp.yzw * 0.5 + 0.5);
@@ -513,8 +502,7 @@ in vec4 color;
 flat in vec2 cell_axial;
 out vec4 frag_color;
 
-// TODO: set with uniform
-const ivec2 map_size = ivec2(128);
+@include_block common
 
 uint ihash(uint n)
 {
@@ -554,8 +542,8 @@ float phong(vec3 normal, vec3 lightDir) {
 
 void main() {
   vec3 albedo;
-  //albedo = color.www;
-  albedo = vec3(color.yzw);
+  albedo = color.www;
+  //albedo = vec3(color.yzw);
   //albedo = ihash3(gl_PrimitiveID);
   int cell_idx = int(round(cell_axial.x)) + (int(round(cell_axial.y)) * map_size.x);
   //albedo = ihash3(cell_idx);

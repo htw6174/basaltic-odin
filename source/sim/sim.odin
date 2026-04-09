@@ -6,7 +6,8 @@ import "core:math"
 // Sim timesteps always represent a fixed time interval. Use to convert to seconds for rendering and set speeds based on seconds.
 STEPS_PER_SECOND :: 60
 
-WORLD_SIZE :: CHUNK_SIZE * 4
+CHUNKS_PER_SIDE :: 4
+WORLD_SIZE :: CHUNK_SIZE * CHUNKS_PER_SIDE
 
 State :: struct {
 	step:  int,
@@ -50,14 +51,14 @@ init :: proc(s: ^State) {
 	valuemap := make([]f32, CHUNK_SIZE * CHUNK_SIZE, allocator = context.temp_allocator)
 	for &c, i in plane.chunks {
 		c.data = make([]Cell_Data, CHUNK_SIZE * CHUNK_SIZE, allocator = plane.allocator)
-		c.origin = {i32(i % 4), i32(i / 4)} * CHUNK_SIZE
+		c.origin = {i32(i % CHUNKS_PER_SIDE), i32(i / CHUNKS_PER_SIDE)} * CHUNK_SIZE
 		fill_grid_simplex(
 			valuemap,
 			c.origin,
 			{CHUNK_SIZE, CHUNK_SIZE},
 			s.seed,
 			3,
-			CHUNK_SIZE * 4,
+			WORLD_SIZE,
 			3,
 		)
 		for &cell, j in c.data {

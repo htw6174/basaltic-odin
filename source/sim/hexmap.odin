@@ -4,7 +4,7 @@ import "core:hash/xxhash"
 import "core:math"
 import "core:math/linalg"
 
-CHUNK_SIZE :: 32
+CHUNK_SIZE :: 8
 
 //sqrt(3)/2
 HALF_SQRT_3 :: 0.8660254040
@@ -134,7 +134,7 @@ simplex_2d :: proc "contextless" (sample: [2]f32, repeat: [2]i32, seed: u32) -> 
 	g2 := gradient(seed, {p1.x, p0.y} if lower else {p0.x, p1.y})
 
 	contribution :: #force_inline proc "contextless" (displacement, gradient: [2]f32) -> f32 {
-		R2 :: HALF_SQRT_3
+		R2 :: 0.75
 		t := R2 - axial_dist2(displacement)
 		if t <= 0 do return 0
 		t = t * t * t * t

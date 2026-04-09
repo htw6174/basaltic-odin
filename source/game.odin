@@ -76,7 +76,7 @@ init :: proc() {
 		textures = make([dynamic]sg.Image, 0),
 		world_camera = {
 			// geez I wish Odin supported creating small arrays with a mix of others e.g. c: [3]f32 = {a.xy, b.x}
-			position = {sim.grid_to_cartesian({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).x, sim.grid_to_cartesian({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).y, 0}, 
+			position = {}, //{sim.grid_to_cartesian({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).x, sim.grid_to_cartesian({sim.CHUNK_SIZE, sim.CHUNK_SIZE}).y, 0}, 
 			orbit = {math.PI / 4, -math.PI / 6, 0}, 
 			distance = 50, 
 			fovy = 60,
@@ -163,9 +163,8 @@ init :: proc() {
 	})
 	
 	g.erosion_image = sg.make_image({
-		// (total map size) * (compute work group size)
-		width = sim.WORLD_SIZE * 16,
-		height = sim.WORLD_SIZE * 16,
+		width = 4096,
+		height = 4096,
 		pixel_format = .RGBA32F,
 		usage = {
 			storage_image = true,
@@ -181,7 +180,7 @@ init :: proc() {
 	})
 	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({})
 	
-	COMPRESS :: 4
+	COMPRESS :: 8
 	//terrain_vertex_buffer, terrain_index_buffer := make_hex_grid_mesh(sim.CHUNK_SIZE)
 	terrain_vertex_buffer, terrain_index_buffer := make_hex_tri_mesh(60, f32(sim.CHUNK_SIZE) / (2 * COMPRESS))
 	Instance_Data :: struct {
@@ -190,7 +189,7 @@ init :: proc() {
 	}
 	instance_buffer: [16]Instance_Data
 	for &inst, i in instance_buffer {
-		cell := sim.Grid_Coord{i32(i % 4) * sim.CHUNK_SIZE / COMPRESS, i32(i / 4) * sim.CHUNK_SIZE / COMPRESS}
+		cell := sim.Grid_Coord{i32(i % sim.CHUNKS_PER_SIDE) * sim.CHUNK_SIZE / COMPRESS, i32(i / sim.CHUNKS_PER_SIDE) * sim.CHUNK_SIZE / COMPRESS}
 		inst.cartesian = sim.grid_to_cartesian(cell)
 		inst.axial = {f32(cell.x), f32(cell.y)}
 	}
@@ -483,13 +482,14 @@ draw :: proc(sim_state_interp: f32) {
 		sg.apply_pipeline(g.terrain_pipeline)
 		sg.apply_bindings(g.terrain_bindings)
 		sg.apply_uniforms(shader.UB_terrain_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
-		sg.draw(0, sim.CHUNK_SIZE * sim.CHUNK_SIZE * 6 * 4 * 3, 16)
+		// TODO: return element count per chunk from mesh generator, use here
+		sg.draw(0, 60 * 60 * 6 * 3, 16)
 		
 		// test cube
 		sg.apply_pipeline(g.cube_pipeline)
 		sg.apply_bindings(g.cube_bindings)
 		sg.apply_uniforms(shader.UB_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
-		sg.draw(0, 36, 1)
+		//sg.draw(0, 36, 1)
 	}
 
 	world_ui: {
@@ -538,7 +538,7 @@ update_heightmap :: proc() {
 	sg.begin_pass({compute = true})
 	sg.apply_pipeline(g.erosion_pipeline)
 	sg.apply_bindings(g.erosion_bindings)
-	sg.dispatch(sim.WORLD_SIZE, sim.WORLD_SIZE, 1)
+	sg.dispatch(4096 / 16, 4096 / 16, 1)
 	sg.end_pass()
 }
 
