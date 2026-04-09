@@ -5,6 +5,10 @@
 
 @include ./ctypes.glsl
 
+@block common
+#define TAU 6.28318530717959
+@end
+
 @cs cs_erosion
 
 layout(binding=0) uniform itexture2D base_map;
@@ -91,6 +95,7 @@ const float EROSION_LACUNARITY = 2.0;
 // scale) of each octave relative to the last.
 const float EROSION_GAIN = 0.5;
 
+@include_block common
 
 // Move this block to common?
 // -----------------------------------------------------------------------------
@@ -110,8 +115,6 @@ vec2 hash(in vec2 x) {
 // -----------------------------------------------------------------------------
 // PHACELLE NOISE FUNCTION
 // -----------------------------------------------------------------------------
-
-#define TAU 6.28318530717959
 
 // The Simple Phacelle Noise function produces a stripe pattern aligned with the input vector.
 // The name Phacelle is a portmanteau of phase and cell, since the function produces a phase by
@@ -324,14 +327,24 @@ ivec2 texelWrap(ivec2 coord, ivec2 range) {
 
 //sqrt(3/4)
 #define Y_FACTOR 0.8660254040
-vec2 axialToCartesian(vec2 grid) {
-  return vec2(grid.x + (grid.y * 0.5), -grid.y * Y_FACTOR);
+vec2 axialToCartesian(vec2 axial) {
+  return vec2(axial.x + (axial.y * 0.5), -axial.y * Y_FACTOR);
 }
+
+float axialDist2(vec2 d) {
+  return d.x*d.x + d.y*d.y + d.x*d.y;
+}
+
+// TODO understand
+vec2 gradDist2(vec2 d) {
+  return vec2(2.0*d.x + d.y, d.x + 2.0*d.y);
+}
+
+const float R2 = Y_FACTOR;
 
 void main() {
   ivec2 in_texel = ivec2(gl_WorkGroupID.xy);
   ivec2 out_texel = ivec2(gl_GlobalInvocationID.xy);
-  //isampler2D base_smp = isampler2D(base_map, ismp);
   vec2 sample_uv = vec2(gl_LocalInvocationID.xy) / vec2(gl_WorkGroupSize.xy);
   
   ivec2 map_size = textureSize(isampler2D(base_map, ismp), 0);
@@ -339,7 +352,7 @@ void main() {
   int h1 = texelFetch(isampler2D(base_map, ismp), texelWrap(in_texel + ivec2(1, 0), map_size), 0).x;
   int h2 = texelFetch(isampler2D(base_map, ismp), texelWrap(in_texel + ivec2(1, 1), map_size), 0).x;
   int h3 = texelFetch(isampler2D(base_map, ismp), texelWrap(in_texel + ivec2(0, 1), map_size), 0).x;
-  // Same ordering as textureGather, x is top-left, runs ccw to w at bottom-left
+  // Same ordering as textureGather, x is top-left, runs cw to w at bottom-left
   vec4 samples = vec4(h3, h2, h1, h0) / 128.0;
   // result is constant across whole workgroup; TODO research if this is automatically optimized in any way
   // NOTE: sampling integer textures isn't supported in the HLSL version sokol uses, must change types or texelfetch 4 samples manually
@@ -347,70 +360,84 @@ void main() {
   vec2 cell_axial = vec2(out_texel) * vec2(map_size) / imageSize(erosion_map);
   vec2 base_cell_axial = vec2(in_texel.x, in_texel.y + 1);
   vec2 local_axial = cell_axial - base_cell_axial;
- 	// cubic interpolation to smooth out first and second derivatives
-	// vec2 f = local_axial * vec2(1., -1.);
-	// f = f*f*(3.0-2.0*f);
-	// vec2 fa = f * vec2(1., -1.);
 	vec2 fa = local_axial;
   float s = -fa.x - fa.y;
   // Determine simplex and convert axial coordinates to barycentric to interpolate samples
   // 0 on -s side, 1 on +s side
   float cell_simplex = ceil(s);
-  vec3 barycentric; // blending factors for nearest 3 cells to this point
-  if (cell_simplex == 0) {
-    barycentric = vec3(1. - fa.x, -fa.y, -s);
-  } else {
-    barycentric = vec3(1. + fa.y, fa.x, s);
-  }
-  // vec3 f = barycentric;
-  // barycentric = f*f*(3.0-2.0*f);
-  // use .y or .w depending on simplex
-  float height = (barycentric.x * samples.x) + 
-                 (barycentric.y * samples.z) +
-                 (barycentric.z * ((1. - cell_simplex) * samples.y + (cell_simplex * samples.w)));
   
-  // Setup for ErosionFilter params
-  // For slope of surface at a point, can use delta of 2 horizontal points in simplex and delta of their midpoint from 3rd point, sign flipped based on simplex
-  // However, this slope will be the same within the entire simplex, which will produce blocky output (same as what I'm seeing with the normals)
-  // Need a better way to smooth across the whole surface
-  vec2 gradient;
-  if (cell_simplex == 0) {
-    gradient = vec2(samples.z - samples.w, samples.y - (samples.z + samples.w) / 2.);
+  // Displacements from nearest samples
+  vec2 d0 = fa;
+  vec2 d1 = fa - vec2(1, -1);
+  vec2 d2;
+  if (cell_simplex == 0.0) {
+    d2 = fa - vec2(1, 0);
   } else {
-    gradient = vec2(samples.y - samples.x, (samples.y + samples.x) / 2. - samples.w);
+    d2 = fa - vec2(0, -1);
   }
+  
+  // Heights at nearest samples
+  float v0 = samples.x;
+  float v1 = samples.z;
+  float v2 = (cell_simplex == 0.0) ? samples.y : samples.w;
+  
+  // Kernel weights
+  float t0 = max(0.0, R2 - axialDist2(d0));
+  float t1 = max(0.0, R2 - axialDist2(d1));
+  float t2 = max(0.0, R2 - axialDist2(d2));
+  
+  float w0 = pow(t0, 4.0);
+  float w1 = pow(t1, 4.0);
+  float w2 = pow(t2, 4.0);
+  
+  // Gradients from derivative of kernel weights
+  vec2 gw0 = -8.0 * pow(t0, 3.0) * gradDist2(d0);
+  vec2 gw1 = -8.0 * pow(t1, 3.0) * gradDist2(d1);
+  vec2 gw2 = -8.0 * pow(t2, 3.0) * gradDist2(d2);
+  
+  float N = w0*v0 + w1*v1 + w2*v2;
+  float D = w0 + w1 + w2;
+  
+  float height = N / D;
+  
+  vec2 gradN = gw0*v0 + gw1*v1 + gw2*v2;
+  vec2 gradD = gw0 + gw1 + gw2;
+  vec2 gradient = (gradN * D - N * gradD) / (D * D);
+  gradient = axialToCartesian(gradient);
+  //gradient = gradient * vec2(1, -1);
+  
   //vec4 phacelle = PhacelleNoise(axialToCartesian(cell_grid) * 0.75, safe_normalize(gradient), 1.0, 0.25, 0.5);
   // height must be in 0..1 range
-  vec3 height_and_slope = vec3(height * 0.5 + 0.5, gradient * 20.);
+  vec3 height_and_slope = vec3(height * 0.5 + 0.5, gradient);
   
   // Define the erosion fade target based on the altitude of the pre-eroded terrain.
   // The fade target should strive to be -1 at valleys and 1 at peaks, but overshooting is ok.
-  float fadeTarget = clamp(height_and_slope.x / (HEIGHT_AMP * 0.6), -1.0, 1.0);
+  float fadeTarget = clamp(height / (HEIGHT_AMP * 0.6), -1.0, 1.0);
   
   float ridgeMap, debug;
   vec4 erode = ErosionFilter(
     axialToCartesian(cell_axial) / map_size, height_and_slope, fadeTarget, 
     EROSION_STRENGTH, EROSION_GULLY_WEIGHT, EROSION_DETAIL,
     EROSION_ROUNDING, EROSION_ONSET, EROSION_ASSUMED_SLOPE,
-    EROSION_SCALE, EROSION_OCTAVES, EROSION_LACUNARITY,
+    EROSION_SCALE / 8., EROSION_OCTAVES, EROSION_LACUNARITY,
     EROSION_GAIN, EROSION_CELL_SCALE, EROSION_NORMALIZATION,
     ridgeMap, debug
   );
   
-  // TODO: should use empty channels for normals calculated with all 7 closest samples
-  //imageStore(erosion_map, out_texel, vec4(height + erode.x, erode.yz * 0.5 + 0.5, ridgeMap));
-  imageStore(erosion_map, out_texel, vec4(height_and_slope.x, gradient * 0.5 + 0.5, 0.));
+  imageStore(erosion_map, out_texel, vec4(height + erode.x, gradient + erode.yz, ridgeMap));
+  //imageStore(erosion_map, out_texel, vec4(height, gradient, 0.));
 }
 @end
 
 @vs vs
 @include ./common.glsl
+@include_block common
 layout(binding=0) uniform texture2D heightmap;
 layout(binding=0) uniform sampler smp;
 
 // TODO: set with uniform
 const ivec2 map_size = ivec2(128);
-const float vertical_scale = 20.;
+const float vertical_scale = 10.;
 
 // per-instance
 in vec2 instance_position;
@@ -425,7 +452,6 @@ flat out vec2 cell_axial;
 
 void main() {
     cell_axial = instance_axial + vertex_axial; // for use with cube coordinate math, q & r components
-    //vec2 cell_grid = cell_axial * vec2(1, -1); // for sampling textures which don't wrap
     vec2 map_uv = cell_axial / vec2(map_size); // for sampling data that span the whole map
     // use cube coords to determine which texels need to be sampled and interpolate between them
     // base cell is closest cell to the bottom-left of this vertex
@@ -454,11 +480,20 @@ void main() {
     //vec2 edge_length = vec2(0.57735026919);
     vec2 samp_delta = vec2(1.) / textureSize(sampler2D(heightmap, smp), 0);
     vec2 uv_to_world = vec2(map_size);
-    vec2 samp_offset_x = vec2(cos(radians(120.)), sin(radians(120.))) * samp_delta;
-    vec2 samp_offset_y = vec2(cos(radians(60.)), sin(radians(60.))) * samp_delta;
-    vec2 samp_offset_z = vec2(1., 0.) * samp_delta;
+    
+    // vec2 gradient = erosion_samp.yz;
+    // vec2 sideDir = gradient.yx * vec2(-1.0, 1.0) * TAU;
+    
+    // float vertical = length(gradient);
+    // vec3 tangent = vec3(gradient, vertical);
+    // vec3 bitangent = vec3(gradient, vertical);
+    //normal = vertical == 0.0 ? vec3(0, 0, 1) : normalize(cross(tangent, bitangent));
+    
+    // vec2 samp_offset_x = vec2(cos(radians(120.)), sin(radians(120.))) * samp_delta;
+    // vec2 samp_offset_y = vec2(cos(radians(60.)), sin(radians(60.))) * samp_delta;
+    // vec2 samp_offset_z = vec2(1., 0.) * samp_delta;
     vec2 uv1 = vec2(samp_delta.x, 0.);
-    vec2 uv2 = vec2(0., -samp_delta.y);
+    vec2 uv2 = vec2(0., samp_delta.y);
     float h1 = texture(sampler2D(heightmap, smp), map_uv + uv1).x;
     float h2 = texture(sampler2D(heightmap, smp), map_uv + uv2).x;
     
@@ -468,7 +503,7 @@ void main() {
     normal = normalize(cross(tangent, bitangent));
     
     //color = vec4(vec3(erosion_samp.w) * 0.5 + 0.5, 1.);
-    color = vec4(vec3(erosion_samp.xyz), erosion_samp.w * 0.5 + 0.5);
+    color = vec4(erosion_samp.x, erosion_samp.yzw * 0.5 + 0.5);
 }
 @end
 
@@ -520,11 +555,13 @@ float phong(vec3 normal, vec3 lightDir) {
 void main() {
   vec3 albedo;
   //albedo = color.www;
+  albedo = vec3(color.yzw);
   //albedo = ihash3(gl_PrimitiveID);
-  int cell_idx = int(round(cell_axial.x)) + (int(round(-cell_axial.y)) * map_size.x);
+  int cell_idx = int(round(cell_axial.x)) + (int(round(cell_axial.y)) * map_size.x);
   //albedo = ihash3(cell_idx);
-  //albedo = vec3(0.2, 0.7, 0.1);
-  albedo = (normal * 0.5) + 0.5;
+  //albedo = vec3(cell_axial / 32., 0.);
+  //albedo = vec3(fract(cell_axial), 0.);
+  //albedo = (normal * 0.5) + 0.5;
   float light = 1.;
   //float light = phong(normal, normalize(vec3(1., 1., 1.)));
   frag_color = vec4(albedo * light, 1.0);

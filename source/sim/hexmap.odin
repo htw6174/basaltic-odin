@@ -116,7 +116,7 @@ simplex_2d :: proc "contextless" (sample: [2]f32, repeat: [2]i32, seed: u32) -> 
 	f := [2]f32{fq, fr}
 	p0 := [2]i32{i32(iq), i32(ir)}
 	// wrap sample coordinates for getting gradient at lattice points
-	// TODO: fix repeat on negative points
+	// TODO: fix repeat for negative input samples
 	p0 = p0 % repeat
 	p1 := (p0 + {1, -1}) % repeat
 	if p1.y < 0 do p1.y += repeat.y
@@ -134,7 +134,7 @@ simplex_2d :: proc "contextless" (sample: [2]f32, repeat: [2]i32, seed: u32) -> 
 	g2 := gradient(seed, {p1.x, p0.y} if lower else {p0.x, p1.y})
 
 	contribution :: #force_inline proc "contextless" (displacement, gradient: [2]f32) -> f32 {
-		R2 :: 0.5
+		R2 :: HALF_SQRT_3
 		t := R2 - axial_dist2(displacement)
 		if t <= 0 do return 0
 		t = t * t * t * t
@@ -145,7 +145,7 @@ simplex_2d :: proc "contextless" (sample: [2]f32, repeat: [2]i32, seed: u32) -> 
 	c2 := contribution(d2, g2)
 	n := c0 + c1 + c2
 	
-	return n * 70
+	return n * 6
 }
 
 fill_grid_simplex :: proc "contextless" (

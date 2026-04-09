@@ -1,8 +1,7 @@
 package sim
 import ecs "../flecs"
-// import "core:math"
-// import "core:math/linalg"
-import "core:math/rand"
+import "core:fmt"
+import "core:math"
 
 // Sim timesteps always represent a fixed time interval. Use to convert to seconds for rendering and set speeds based on seconds.
 STEPS_PER_SECOND :: 60
