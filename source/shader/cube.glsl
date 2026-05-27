@@ -4,7 +4,11 @@
 @include ./ctypes.glsl
 
 @vs vs
-@include ./common.glsl
+//@include ./common.glsl
+
+layout(binding = 1) uniform vs_params {
+  mat4 mvp;
+};
 
 in vec4 position;
 in vec4 color0;

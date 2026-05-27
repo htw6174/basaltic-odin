@@ -6,8 +6,7 @@
 @include ./ctypes.glsl
 
 @block common
-#define TAU 6.28318530717959
-
+@include ./common.glsl
 // TODO: set with uniform
 const ivec2 map_size = ivec2(32);
 const float vertical_scale = 2.;
@@ -359,8 +358,9 @@ void main() {
   ivec2 map_size = textureSize(isampler2D(base_map, ismp), 0);
   ivec2 output_size = imageSize(erosion_map);
   
-  // work group id from 0-255; map_size = 32; should be 1/8 of work group id; should come from ratio of work group count to map size
-  ivec2 in_texel = ivec2(gl_WorkGroupID.xy) / 8; //(ivec2(gl_NumWorkGroups.xy) / map_size);
+  //remap_num_workgroups_builtin();
+  // should come from ratio of work group count to map size, but NumWorkGroups isn't supported by hlsl so spirvcross fails with that enabled
+  ivec2 in_texel = ivec2(gl_WorkGroupID.xy) / 4; //(ivec2(gl_NumWorkGroups.xy) / map_size);
   ivec2 out_texel = ivec2(gl_GlobalInvocationID.xy);
   vec2 sample_uv = vec2(gl_LocalInvocationID.xy) / vec2(gl_WorkGroupSize.xy);
   
@@ -434,19 +434,24 @@ void main() {
     axialToCartesian(cell_axial) / map_size, height_and_slope, fadeTarget, 
     EROSION_STRENGTH, EROSION_GULLY_WEIGHT, EROSION_DETAIL,
     EROSION_ROUNDING, EROSION_ONSET, EROSION_ASSUMED_SLOPE,
-    EROSION_SCALE / 8., EROSION_OCTAVES, EROSION_LACUNARITY,
+    EROSION_SCALE / 2., EROSION_OCTAVES, EROSION_LACUNARITY,
     EROSION_GAIN, EROSION_CELL_SCALE, EROSION_NORMALIZATION,
     ridgeMap, debug
   );
   
-  imageStore(erosion_map, out_texel, vec4(height + erode.x, gradient + erode.yz, ridgeMap));
+  //(erode.zy * vec2(-1, 1) / 4.)
+  imageStore(erosion_map, out_texel, vec4(height + (erode.x * 4.), gradient, ridgeMap));
   //imageStore(erosion_map, out_texel, vec4(height, gradient, 0.));
 }
 @end
 
 @vs vs
-@include ./common.glsl
 @include_block common
+
+layout(binding = 1) uniform vs_params {
+  mat4 mvp;
+};
+
 layout(binding=0) uniform texture2D heightmap;
 layout(binding=0) uniform sampler smp;
 
@@ -497,12 +502,12 @@ void main() {
 @end
 
 @fs fs
+@include_block common
+
 in vec3 normal;
 in vec4 color;
 flat in vec2 cell_axial;
 out vec4 frag_color;
-
-@include_block common
 
 uint ihash(uint n)
 {
@@ -525,17 +530,17 @@ vec3 ihash3(int n)
 #define DIFFUSE 1.25
 #define REFLECTION 1.0
 
-#define LIGHT_AMBIENT 0.05
-#define LIGHT1_DIFFUSE 1.0
+#define LIGHT_AMBIENT vec3(0.2, 0.3, 0.4)
+#define LIGHT1_DIFFUSE vec3(0.95, 0.95, 0.8)
 
-float phong(vec3 normal, vec3 lightDir) {
-    float ambient = REFLECTION * LIGHT_AMBIENT;
+vec3 phong(vec3 normal, vec3 lightDir) {
+    vec3 ambient = REFLECTION * LIGHT_AMBIENT;
     //vec3 reflection = normalize(reflect(-camera_position, normal));
     float dotLN = dot(lightDir, normal);
     if (dotLN < 0.0) {
         return ambient;
     }
-    float diffuse = DIFFUSE * dotLN * LIGHT1_DIFFUSE;
+    vec3 diffuse = DIFFUSE * dotLN * LIGHT1_DIFFUSE;
     //pow(max(dot(reflect(e,n),l),0.0),s) * nrm;
     return ambient + diffuse;
 }
@@ -545,13 +550,13 @@ void main() {
   albedo = color.www;
   //albedo = vec3(color.yzw);
   //albedo = ihash3(gl_PrimitiveID);
-  int cell_idx = int(round(cell_axial.x)) + (int(round(cell_axial.y)) * map_size.x);
+  //int cell_idx = int(round(cell_axial.x)) + (int(round(cell_axial.y)) * map_size.x);
   //albedo = ihash3(cell_idx);
   //albedo = vec3(cell_axial / 32., 0.);
   //albedo = vec3(fract(cell_axial), 0.);
   //albedo = (normal * 0.5) + 0.5;
-  float light = 1.;
-  //float light = phong(normal, normalize(vec3(1., 1., 1.)));
+  //vec3 light = vec3(1.);
+  vec3 light = phong(normal, normalize(vec3(mouse.xy, 1.)));
   frag_color = vec4(albedo * light, 1.0);
 }
 @end

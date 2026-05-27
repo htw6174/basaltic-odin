@@ -17,6 +17,7 @@ import sglue "sokol/glue"
 TARGET_FPS :: 60
 PIXEL_WINDOW_WIDTH :: 640
 PIXEL_WINDOW_HEIGHT :: 480
+EROSION_TEXTURE_SIZE :: 2048
 
 Game_Memory :: struct {
 	run:              bool, // Only mandatory field, needed by harness
@@ -163,8 +164,8 @@ init :: proc() {
 	})
 	
 	g.erosion_image = sg.make_image({
-		width = 4096,
-		height = 4096,
+		width = EROSION_TEXTURE_SIZE,
+		height = EROSION_TEXTURE_SIZE,
 		pixel_format = .RGBA32F,
 		usage = {
 			storage_image = true,
@@ -180,7 +181,7 @@ init :: proc() {
 	})
 	g.erosion_bindings.samplers[shader.SMP_terrain_ismp] = sg.make_sampler({})
 	
-	COMPRESS :: 8
+	COMPRESS :: 4
 	//terrain_vertex_buffer, terrain_index_buffer := make_hex_grid_mesh(sim.CHUNK_SIZE)
 	terrain_vertex_buffer, terrain_index_buffer := make_hex_tri_mesh(60, f32(sim.CHUNK_SIZE) / (2 * COMPRESS))
 	Instance_Data :: struct {
@@ -460,6 +461,13 @@ draw :: proc(sim_state_interp: f32) {
 	s := g.sim_state
 	defer sg.commit()
 	
+	globals := shader.Terrain_Globals{
+		time = 0,
+		mouse = {
+			
+		}
+	}
+	
 	if g.terrain_dirty {
 		update_heightmap()
 		g.terrain_dirty = false
@@ -481,6 +489,8 @@ draw :: proc(sim_state_interp: f32) {
 		// test generated terrain
 		sg.apply_pipeline(g.terrain_pipeline)
 		sg.apply_bindings(g.terrain_bindings)
+		// Uniforms must be applied within a pass and pipeline
+		sg.apply_uniforms(shader.UB_terrain_globals, {ptr = &globals, size = size_of(shader.Terrain_Globals)})
 		sg.apply_uniforms(shader.UB_terrain_vs_params, {ptr = &vs_params, size = size_of(vs_params)})
 		// TODO: return element count per chunk from mesh generator, use here
 		sg.draw(0, 60 * 60 * 6 * 3, 16)
@@ -538,7 +548,7 @@ update_heightmap :: proc() {
 	sg.begin_pass({compute = true})
 	sg.apply_pipeline(g.erosion_pipeline)
 	sg.apply_bindings(g.erosion_bindings)
-	sg.dispatch(4096 / 16, 4096 / 16, 1)
+	sg.dispatch(EROSION_TEXTURE_SIZE / 16, EROSION_TEXTURE_SIZE / 16, 1)
 	sg.end_pass()
 }
 
